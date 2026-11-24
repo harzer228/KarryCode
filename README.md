@@ -22,9 +22,9 @@ The installer checks SHA-256 and adds `karrycode` to your user PATH and the curr
 
 ## 11-second quick start
 
-[![Watch KarryCode install, choose a model and build a site](.github/media/demo-cover.png)](https://github.com/harzer228/KarryCode/releases/download/v0.1.0-beta.1/karrycode-quickstart.mp4)
+[![Watch KarryCode install, choose a model and build a site](.github/media/demo-cover.png)](https://harzer228.github.io/KarryCode/demo/)
 
-The recording uses a labeled demo model and compresses waiting time. KarryCode performs the file changes and serves the preview locally. [Смотреть на русском](https://github.com/harzer228/KarryCode/releases/download/v0.1.0-beta.1/karrycode-quickstart-ru.mp4)
+The recording uses a labeled demo model and compresses waiting time. KarryCode performs the file changes and serves the preview locally. [Watch in browser](https://harzer228.github.io/KarryCode/demo/) · [Смотреть на русском](https://harzer228.github.io/KarryCode/demo/ru.html)
 
 ## Install on Linux
 
