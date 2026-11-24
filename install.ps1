@@ -1,12 +1,16 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$')]
-    [string] $Version,
+    [Alias('Version')]
+    [string] $KarryCodeVersion,
     [switch] $Uninstall,
     [switch] $NoUserPath
 )
 
 $ErrorActionPreference = 'Stop'
+$tagPattern = '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$'
+if ($KarryCodeVersion -and $KarryCodeVersion -notmatch $tagPattern) {
+    throw 'Specify a valid release tag, such as v0.1.0-beta.1.'
+}
 if ($env:OS -ne 'Windows_NT' -or @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE) -notcontains 'AMD64') {
     throw 'KarryCode requires Windows x64.'
 }
@@ -40,10 +44,10 @@ if ($Uninstall) {
     return
 }
 
-$ref = if ($Version) { "tags/$Version" } else { 'latest' }
+$ref = if ($KarryCodeVersion) { "tags/$KarryCodeVersion" } else { 'latest' }
 $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/$ref" -Headers @{ 'User-Agent' = 'KarryCode-Installer' }
 $tag = [string] $release.tag_name
-if ($release.draft -or $tag -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$' -or ($Version -and $tag -cne $Version)) {
+if ($release.draft -or $tag -notmatch $tagPattern -or ($KarryCodeVersion -and $tag -cne $KarryCodeVersion)) {
     throw 'The release metadata is invalid.'
 }
 $assetName = 'karrycode-windows-x64.exe'
