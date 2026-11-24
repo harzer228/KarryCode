@@ -44,15 +44,12 @@ if ($Uninstall) {
     return
 }
 
-$ref = if ($KarryCodeVersion) { "tags/$KarryCodeVersion" } else { 'latest' }
-$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/$ref" -Headers @{ 'User-Agent' = 'KarryCode-Installer' }
-$tag = [string] $release.tag_name
-if ($release.draft -or $tag -notmatch $tagPattern -or ($KarryCodeVersion -and $tag -cne $KarryCodeVersion)) {
-    throw 'The release metadata is invalid.'
-}
 $assetName = 'karrycode-windows-x64.exe'
-$base = "https://github.com/$repo/releases/download/$tag"
-$expectedDigest = [string] ($release.assets | Where-Object { $_.name -ceq $assetName } | Select-Object -First 1).digest
+$base = if ($KarryCodeVersion) {
+    "https://github.com/$repo/releases/download/$KarryCodeVersion"
+} else {
+    "https://github.com/$repo/releases/latest/download"
+}
 
 $null = New-Item -ItemType Directory -Path $bin -Force
 $nonce = [Guid]::NewGuid().ToString('N')
@@ -64,14 +61,15 @@ try {
     $checksumLines = @(Get-Content -LiteralPath $sums | Where-Object { $_ -cmatch ('^[a-fA-F0-9]{64}  ' + [regex]::Escape($assetName) + '$') })
     if ($checksumLines.Count -ne 1) { throw "The release has no unique SHA-256 for $assetName." }
     $sha = $checksumLines[0].Substring(0, 64)
-    if ($expectedDigest -and $expectedDigest -ine "sha256:$sha") { throw 'The published hashes disagree.' }
     Invoke-WebRequest -Uri "$base/$assetName" -UseBasicParsing -OutFile $download
     if ((Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash -ine $sha) {
         throw 'SHA-256 mismatch. The installed version was preserved.'
     }
     Unblock-File -LiteralPath $download
     $reported = & $download --version
-    if ($LASTEXITCODE -ne 0 -or $reported -cne "KarryCode CLI $($tag.Substring(1))") {
+    $expectedVersion = if ($KarryCodeVersion) { "KarryCode CLI $($KarryCodeVersion.Substring(1))" }
+    if ($LASTEXITCODE -ne 0 -or $reported -cnotmatch '^KarryCode CLI [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$' -or
+        ($expectedVersion -and $reported -cne $expectedVersion)) {
         throw 'The downloaded binary does not match the release.'
     }
     if (Test-Path -LiteralPath $exe) {
@@ -90,4 +88,4 @@ if (-not $NoUserPath) {
     [Environment]::SetEnvironmentVariable('Path', (Update-KarryCodePath $userPath $false), 'User')
 }
 $env:Path = Update-KarryCodePath $env:Path $false
-Write-Output "Installed KarryCode CLI $($tag.Substring(1)). Run karrycode to get started."
+Write-Output "Installed $reported. Run karrycode to get started."

@@ -10,24 +10,14 @@ $KarryFixtureBinary = (Resolve-Path -LiteralPath $Executable).Path
 $KarryFixtureHash = (Get-FileHash -LiteralPath $KarryFixtureBinary -Algorithm SHA256).Hash.ToLowerInvariant()
 $KarryFixtureTag = "v$Version"
 
-function Invoke-RestMethod {
-    param([string] $Uri, [hashtable] $Headers)
-    if ($Uri -cne 'https://api.github.com/repos/harzer228/KarryCode/releases/latest') {
-        throw "Unexpected metadata URL: $Uri"
-    }
-    return @{
-        tag_name = $KarryFixtureTag
-        draft = $false
-        assets = @(@{ name = 'karrycode-windows-x64.exe'; digest = "sha256:$KarryFixtureHash" })
-    }
-}
-
 function Invoke-WebRequest {
     param([string] $Uri, [switch] $UseBasicParsing, [string] $OutFile)
-    $base = "https://github.com/harzer228/KarryCode/releases/download/$KarryFixtureTag"
-    if ($Uri -ceq "$base/SHA256SUMS") {
+    $base = 'https://github.com/harzer228/KarryCode/releases'
+    $latest = "$base/latest/download"
+    $pinned = "$base/download/$KarryFixtureTag"
+    if ($Uri -cin @("$latest/SHA256SUMS", "$pinned/SHA256SUMS")) {
         Set-Content -LiteralPath $OutFile -Encoding ascii -Value "$KarryFixtureHash  karrycode-windows-x64.exe"
-    } elseif ($Uri -ceq "$base/karrycode-windows-x64.exe") {
+    } elseif ($Uri -cin @("$latest/karrycode-windows-x64.exe", "$pinned/karrycode-windows-x64.exe")) {
         Copy-Item -LiteralPath $KarryFixtureBinary -Destination $OutFile
     } else {
         throw "Unexpected asset URL: $Uri"
@@ -53,7 +43,7 @@ try {
         throw 'The installed karrycode was not on the current PATH.'
     }
     if ((& karrycode --version) -cne "KarryCode CLI $Version") { throw 'Unexpected version.' }
-    & $installer -NoUserPath
+    & $installer -Version $KarryFixtureTag -NoUserPath
     $original = (Get-FileHash -LiteralPath $expected -Algorithm SHA256).Hash
     $KarryFixtureHash = '0' * 64
     $rejected = $false
