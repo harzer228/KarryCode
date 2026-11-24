@@ -7,9 +7,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$tagPattern = '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$'
+$versionPattern = '[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-[0-9A-Za-z.-]+)?'
+$tagPattern = "^v$versionPattern$"
 if ($KarryCodeVersion -and $KarryCodeVersion -notmatch $tagPattern) {
-    throw 'Specify a valid release tag, such as v0.1.0-beta.1.'
+    throw 'Specify a valid release tag, such as v1.1-beta.'
 }
 if ($env:OS -ne 'Windows_NT' -or @($env:PROCESSOR_ARCHITEW6432, $env:PROCESSOR_ARCHITECTURE) -notcontains 'AMD64') {
     throw 'KarryCode requires Windows x64.'
@@ -68,7 +69,7 @@ try {
     Unblock-File -LiteralPath $download
     $reported = & $download --version
     $expectedVersion = if ($KarryCodeVersion) { "KarryCode CLI $($KarryCodeVersion.Substring(1))" }
-    if ($LASTEXITCODE -ne 0 -or $reported -cnotmatch '^KarryCode CLI [0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$' -or
+    if ($LASTEXITCODE -ne 0 -or $reported -cnotmatch "^KarryCode CLI $versionPattern$" -or
         ($expectedVersion -and $reported -cne $expectedVersion)) {
         throw 'The downloaded binary does not match the release.'
     }

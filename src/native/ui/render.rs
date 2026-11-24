@@ -6,6 +6,7 @@
 //! pure so it can be tested without a terminal.
 
 use crossterm::style::Color;
+use std::sync::{Arc, LazyLock};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 pub const BRAND: Color = Color::Rgb {
@@ -113,6 +114,7 @@ impl Style {
 pub struct Span {
     pub text: String,
     pub style: Style,
+    url: Option<Arc<url::Url>>,
 }
 
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -152,6 +154,10 @@ impl Line {
     }
 
     pub fn push(&mut self, text: impl Into<String>, style: Style) {
+        self.push_part(text, style, None);
+    }
+
+    fn push_part(&mut self, text: impl Into<String>, style: Style, url: Option<&Arc<url::Url>>) {
         let text: String = text
             .into()
             .chars()
@@ -162,11 +168,27 @@ impl Line {
         }
         if let Some(last) = self.spans.last_mut()
             && last.style == style
+            && last.url.as_ref() == url
         {
             last.text.push_str(&text);
             return;
         }
-        self.spans.push(Span { text, style });
+        self.spans.push(Span {
+            text,
+            style,
+            url: url.cloned(),
+        });
+    }
+
+    pub(super) fn url_at(&self, column: usize) -> Option<&Arc<url::Url>> {
+        let mut offset = 0;
+        for span in &self.spans {
+            offset += span.text.width();
+            if column < offset {
+                return span.url.as_ref();
+            }
+        }
+        None
     }
 
     pub fn extend(&mut self, other: Self) {
@@ -223,6 +245,7 @@ impl Line {
                 line.spans.push(Span {
                     text,
                     style: span.style,
+                    url: span.url.clone(),
                 });
             }
         }
@@ -245,6 +268,7 @@ impl Line {
             }
             if let Some(last) = spans.last_mut()
                 && last.style == span.style
+                && last.url == span.url
             {
                 last.text.push_str(&span.text);
                 continue;
@@ -267,7 +291,7 @@ pub fn wrap(line: &Line, width: usize) -> Vec<Line> {
         used: 0,
         space: false,
     };
-    let mut word: Vec<(char, Style)> = Vec::new();
+    let mut word = Vec::new();
     for span in &line.spans {
         for character in span.text.chars() {
             if character.is_control() {
@@ -280,7 +304,7 @@ pub fn wrap(line: &Line, width: usize) -> Vec<Line> {
                 }
                 flow.space = true;
             } else {
-                word.push((character, span.style));
+                word.push((character, span.style, span.url.as_ref()));
             }
         }
     }
@@ -298,6 +322,8 @@ struct Flow {
     space: bool,
 }
 
+type StyledChar<'a> = (char, Style, Option<&'a Arc<url::Url>>);
+
 impl Flow {
     fn break_row(&mut self, separator: &'static str) {
         if !self.current.is_blank() {
@@ -309,8 +335,8 @@ impl Flow {
         self.space = false;
     }
 
-    fn word(&mut self, word: &[(char, Style)]) {
-        let cells: usize = word.iter().map(|(c, _)| c.width().unwrap_or(0)).sum();
+    fn word(&mut self, word: &[StyledChar<'_>]) {
+        let cells: usize = word.iter().map(|(c, _, _)| c.width().unwrap_or(0)).sum();
         let gap = usize::from(self.space && !self.current.is_blank());
         if self.used + gap + cells > self.width && !self.current.is_blank() {
             self.break_row(" ");
@@ -320,19 +346,19 @@ impl Flow {
         }
         self.space = false;
         if cells <= self.width {
-            for (character, style) in word {
-                self.current.push(character.to_string(), *style);
+            for (character, style, url) in word {
+                self.current.push_part(character.to_string(), *style, *url);
             }
             self.used += cells;
             return;
         }
-        for (character, style) in word {
+        for (character, style, url) in word {
             let cell = character.width().unwrap_or(0);
             if self.used + cell > self.width && !self.current.is_blank() {
                 self.break_row("");
             }
             if cell <= self.width {
-                self.current.push(character.to_string(), *style);
+                self.current.push_part(character.to_string(), *style, *url);
                 self.used += cell;
             }
         }
@@ -561,8 +587,9 @@ pub fn inline(text: &str) -> Line {
             '`' => {
                 if let Some(end) = find(&characters, index + 1, '`') {
                     flush(&mut line, &mut buffer);
-                    line.push(
-                        characters[index + 1..end].iter().collect::<String>(),
+                    autolinks(
+                        &mut line,
+                        &characters[index + 1..end].iter().collect::<String>(),
                         Style::fg(CODEFG).with_bg(CODE),
                     );
                     index = end + 1;
@@ -574,8 +601,9 @@ pub fn inline(text: &str) -> Line {
             '*' if characters.get(index + 1) == Some(&'*') => {
                 if let Some(end) = find_pair(&characters, index + 2) {
                     flush(&mut line, &mut buffer);
-                    line.push(
-                        characters[index + 2..end].iter().collect::<String>(),
+                    autolinks(
+                        &mut line,
+                        &characters[index + 2..end].iter().collect::<String>(),
                         Style::fg(FG).bold(),
                     );
                     index = end + 2;
@@ -587,9 +615,12 @@ pub fn inline(text: &str) -> Line {
             '[' => {
                 if let Some((label, url, end)) = link(&characters, index) {
                     flush(&mut line, &mut buffer);
-                    line.push(label, Style::fg(FG).bold());
+                    let address = web_url(&url);
+                    line.push_part(label, Style::fg(FG).bold(), address.as_ref());
                     if !url.is_empty() {
-                        line.push(format!(" ({url})"), Style::dim());
+                        line.push(" (", Style::dim());
+                        line.push_part(url, Style::brand(), address.as_ref());
+                        line.push(")", Style::dim());
                     }
                     index = end;
                 } else {
@@ -609,8 +640,71 @@ pub fn inline(text: &str) -> Line {
 
 fn flush(line: &mut Line, buffer: &mut String) {
     if !buffer.is_empty() {
-        line.push(std::mem::take(buffer), Style::fg(FG));
+        autolinks(line, buffer, Style::fg(FG));
+        buffer.clear();
     }
+}
+
+fn web_url(text: &str) -> Option<Arc<url::Url>> {
+    if text
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch.is_control() || ch == '\\')
+    {
+        return None;
+    }
+    let url = url::Url::parse(text).ok()?;
+    (matches!(url.scheme(), "http" | "https")
+        && url.has_host()
+        && url.username().is_empty()
+        && url.password().is_none())
+    .then(|| Arc::new(url))
+}
+
+fn autolinks(line: &mut Line, text: &str, style: Style) {
+    static WEB: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"https?://[^\s<>"'`]+"#).expect("literal URL pattern")
+    });
+    let mut end = 0;
+    for found in WEB.find_iter(text) {
+        let mut candidate = found
+            .as_str()
+            .trim_end_matches(['.', ',', ':', ';', '!', '?']);
+        for (opening, closing) in [('(', ')'), ('[', ']'), ('{', '}')] {
+            while candidate.ends_with(closing)
+                && candidate.matches(opening).count() < candidate.matches(closing).count()
+            {
+                candidate = candidate.strip_suffix(closing).unwrap();
+            }
+        }
+        let Some(url) = web_url(candidate) else {
+            continue;
+        };
+        line.push(&text[end..found.start()], style);
+        line.push_part(candidate, style.with_fg(BRAND), Some(&url));
+        end = found.start() + candidate.len();
+    }
+    line.push(&text[end..], style);
+}
+
+#[cfg(test)]
+#[test]
+fn long_preview_links_keep_the_destination_when_wrapped() {
+    let address = "http://127.0.0.1:59114/deeply/nested/path";
+    let lines = assistant(&format!("Превью: ({address})."), 24);
+    let linked_rows = lines
+        .iter()
+        .filter(|line| {
+            (0..line.width()).any(|column| {
+                line.url_at(column)
+                    .is_some_and(|url| url.as_str() == address)
+            })
+        })
+        .count();
+    assert!(linked_rows >= 2);
+    let hostile = inline("[Bad](file:///test) [Private](https://user:secret@example.com)");
+    assert!((0..hostile.width()).all(|column| hostile.url_at(column).is_none()));
+    let ipv6 = inline("Preview: http://[::1]:8000.");
+    assert_eq!(ipv6.url_at(11).unwrap().as_str(), "http://[::1]:8000/");
 }
 
 fn find(characters: &[char], from: usize, target: char) -> Option<usize> {

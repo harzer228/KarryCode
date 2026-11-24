@@ -46,16 +46,45 @@ fn matches(pattern: &str, text: &str) -> bool {
     }
     previous[text.len()]
 }
-pub fn search(root: &Path, folder: &str, pattern: &str, filter: Option<&str>) -> Result<String> {
+pub fn search(
+    root: &Path,
+    folder: &str,
+    pattern: &str,
+    filter: Option<&str>,
+    regex: bool,
+) -> Result<String> {
     ensure!(
         !pattern.is_empty() && pattern.len() <= 256,
         "Expected a pattern up to 256 bytes"
     );
-    let folder = super::safe_path(root, if folder.is_empty() { "." } else { folder })?;
-    let root = root.canonicalize()?;
-    let mut dirs = vec![folder];
-    let mut visited = 0usize;
+    let folder = if folder.is_empty() { "." } else { folder };
+    let directory = super::safe_path(root, folder)?;
+    let expression = regex
+        .then(|| {
+            regex::RegexBuilder::new(pattern)
+                .size_limit(256 * 1024)
+                .build()
+        })
+        .transpose()?;
+    let line_matches = |line: &str| {
+        expression
+            .as_ref()
+            .map_or_else(|| line.contains(pattern), |regex| regex.is_match(line))
+    };
     let mut output = Vec::new();
+    if filter.is_some() && directory.is_file() {
+        let content = super::read_file(root, folder)?;
+        match_lines(
+            &mut output,
+            &folder.replace('\\', "/"),
+            &content,
+            &line_matches,
+        );
+        return Ok(search_output(output));
+    }
+    let root = root.canonicalize()?;
+    let mut dirs = vec![directory];
+    let mut visited = 0usize;
     'walk: while let Some(dir) = dirs.pop() {
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
@@ -99,28 +128,45 @@ pub fn search(root: &Path, folder: &str, pattern: &str, filter: Option<&str>) ->
                     continue;
                 }
                 if let Ok(content) = super::read_file(&root, &rel) {
-                    for (line, value) in content.lines().enumerate() {
-                        if value.contains(pattern) {
-                            output.push(format!(
-                                "{portable}:{} {}",
-                                line + 1,
-                                value.chars().take(240).collect::<String>()
-                            ));
-                            if output.len() == 50 {
-                                break;
-                            }
-                        }
-                    }
+                    match_lines(&mut output, &portable, &content, &line_matches);
                 }
             } else if matching(pattern) {
                 output.push(portable);
             }
         }
     }
+    Ok(search_output(output))
+}
+
+fn match_lines(
+    output: &mut Vec<String>,
+    path: &str,
+    content: &str,
+    matches: &impl Fn(&str) -> bool,
+) {
+    let remaining = 50usize.saturating_sub(output.len());
+    output.extend(
+        content
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| matches(line))
+            .take(remaining)
+            .map(|(line, content)| {
+                format!(
+                    "{path}:{} {}",
+                    line + 1,
+                    content.chars().take(240).collect::<String>()
+                )
+            }),
+    );
+}
+
+fn search_output(output: Vec<String>) -> String {
     if output.is_empty() {
-        output.push("No matches".into());
+        "No matches".into()
+    } else {
+        output.join("\n")
     }
-    Ok(output.join("\n"))
 }
 
 pub fn git(root: &Path, diff: bool, staged: bool) -> Result<String> {

@@ -107,8 +107,8 @@ impl Mode {
                 "Confirm edits, commands and page access. Desktop control asks for permission once per chat."
             ),
             Self::Auto => tr!(
-                "Обратимые правки и команды в песочнице запускаются автоматически. Доступ к рабочему столу подтверждается один раз на чат.",
-                "Allow reversible edits and isolated commands automatically. Approve desktop control once per chat."
+                "Обратимые правки, команды в песочнице и действия на локальном предпросмотре выполняются автоматически. Доступ к рабочему столу подтверждается один раз на чат.",
+                "Allow reversible edits, isolated commands and local preview input automatically. Approve desktop control once per chat."
             ),
             Self::Full => tr!(
                 "Доступ к пользовательским файлам, сети и включённому управлению рабочим столом в этом чате. Запуск вне песочницы требует отдельного согласия.",

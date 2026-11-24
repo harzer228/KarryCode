@@ -1,6 +1,7 @@
 use super::{Line, Style};
 use anyhow::{Context, Result, ensure};
 use crossterm::event::MouseEvent;
+use std::sync::Arc;
 use unicode_width::UnicodeWidthChar;
 
 pub(super) struct Viewport {
@@ -22,9 +23,18 @@ pub(super) struct Selection {
     end: Point,
     width: usize,
     dragging: bool,
+    pressed_url: Option<Arc<url::Url>>,
 }
 
 impl Viewport {
+    fn url_at(&self, mouse: MouseEvent) -> Option<&Arc<url::Url>> {
+        let row = usize::from(mouse.row).checked_sub(self.top)?;
+        let column = usize::from(mouse.column).checked_sub(self.left)?;
+        (column < self.width)
+            .then(|| self.rows.get(row)?.url_at(column))
+            .flatten()
+    }
+
     fn point(&self, mouse: MouseEvent) -> Point {
         let row = usize::from(mouse.row)
             .saturating_sub(self.top)
@@ -51,11 +61,23 @@ impl Viewport {
             end: point,
             width: self.width,
             dragging: true,
+            pressed_url: self.url_at(mouse).cloned(),
         })
     }
 }
 
 impl Selection {
+    pub fn release_link(&self, view: &Viewport, mouse: MouseEvent) -> Option<Arc<url::Url>> {
+        if self.dragging
+            && view.point(mouse) == self.anchor
+            && let Some(url) = &self.pressed_url
+            && view.url_at(mouse) == Some(url)
+        {
+            return Some(Arc::clone(url));
+        }
+        None
+    }
+
     pub fn width(&self) -> usize {
         self.width
     }
@@ -63,6 +85,9 @@ impl Selection {
     pub fn extend(&mut self, viewport: &Viewport, mouse: MouseEvent) {
         if self.dragging {
             self.end = viewport.point(mouse);
+            if self.end != self.anchor {
+                self.pressed_url = None;
+            }
             self.dragging = matches!(mouse.kind, crossterm::event::MouseEventKind::Drag(_));
         }
     }
@@ -140,6 +165,43 @@ impl Selection {
         let text = blocks.join("\n");
         (!text.trim().is_empty()).then_some(text)
     }
+}
+
+#[cfg(windows)]
+pub(super) fn open_url(url: &url::Url) -> Result<()> {
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+    let target: Vec<u16> = url.as_str().encode_utf16().chain([0]).collect();
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            windows_sys::w!("open"),
+            target.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    } as isize;
+    ensure!(result > 32, "Windows could not open the link ({result})");
+    Ok(())
+}
+
+#[cfg(unix)]
+pub(super) fn open_url(url: &url::Url) -> Result<()> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("xdg-open")
+        .arg(url.as_str())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context(tr!(
+            "Не удалось запустить xdg-open.",
+            "Could not start xdg-open."
+        ))?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
 }
 
 fn split_line<'a>(
@@ -331,6 +393,7 @@ mod tests {
             },
             width: 14,
             dragging: false,
+            pressed_url: None,
         };
         assert_eq!(
             selection.text(lines.iter().enumerate()).as_deref(),
@@ -355,6 +418,7 @@ mod tests {
             end: Point { row: 5, column: 2 },
             width: 12,
             dragging: false,
+            pressed_url: None,
         };
         assert_eq!(
             selection
@@ -368,5 +432,42 @@ mod tests {
             Some("界e\u{301}\nте")
         );
         assert!(selection.highlight(5, &view.rows[0]).is_some());
+    }
+
+    #[test]
+    fn click_opens_links_but_drag_still_selects_text() {
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
+        let mouse = |kind, column| MouseEvent {
+            kind,
+            row: 4,
+            column,
+            modifiers: KeyModifiers::NONE,
+        };
+        let down = MouseEventKind::Down(MouseButton::Left);
+        let up = MouseEventKind::Up(MouseButton::Left);
+        let drag = MouseEventKind::Drag(MouseButton::Left);
+        let view = Viewport {
+            top: 4,
+            left: 2,
+            width: 55,
+            start: 12,
+            rows: super::super::render::assistant(
+                "Превью: [открыть](http://127.0.0.1:59114/).",
+                55,
+            ),
+        };
+        let click = mouse(up, 15);
+        let mut selection = view.begin(mouse(down, 15)).unwrap();
+        assert_eq!(
+            selection.release_link(&view, click).unwrap().as_str(),
+            "http://127.0.0.1:59114/"
+        );
+        selection.extend(&view, mouse(drag, 20));
+        assert!(selection.release_link(&view, click).is_none());
+        assert!(
+            selection
+                .text(view.rows.iter().enumerate().map(|(i, line)| (12 + i, line)))
+                .is_some()
+        );
     }
 }

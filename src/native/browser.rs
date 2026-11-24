@@ -1,3 +1,4 @@
+use super::permissions::Mode;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 use std::{
@@ -10,6 +11,34 @@ use std::{
     time::{Duration, Instant},
 };
 use tungstenite::{Message, WebSocket, client::client_with_config, protocol::WebSocketConfig};
+
+pub(super) fn review_required(
+    mode: Mode,
+    operation: &str,
+    local_preview: impl FnOnce() -> bool,
+) -> bool {
+    match mode {
+        Mode::Full => false,
+        Mode::Ask => true,
+        Mode::Auto => match operation {
+            "navigate" | "snapshot" | "tabs" | "console" | "select_tab" | "new_tab"
+            | "close_tab" => false,
+            "click" | "fill" | "type" | "scroll" => !local_preview(),
+            _ => true,
+        },
+    }
+}
+
+fn preview_frame(tree: &Value, address: &str) -> bool {
+    let url = |value: &Value| url::Url::parse(value.as_str().unwrap_or_default()).ok();
+    let Some(frame) = url(&tree["frame"]["url"]) else {
+        return false;
+    };
+    let Ok(preview) = url::Url::parse(address) else {
+        return false;
+    };
+    frame.origin() == preview.origin() && tree["childFrames"].as_array().is_none_or(Vec::is_empty)
+}
 
 pub struct Browser {
     socket: WebSocket<TcpStream>,
@@ -277,6 +306,11 @@ impl Browser {
         }
         self.events.clear();
         Ok(())
+    }
+
+    pub(super) fn is_local_preview(&mut self, address: &str) -> bool {
+        self.rpc("Page.getFrameTree", json!({}), true)
+            .is_ok_and(|result| preview_frame(&result["frameTree"], address))
     }
 
     pub fn call(&mut self, operation: &str, args: &Value) -> Result<(String, Option<String>)> {
@@ -555,6 +589,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn only_local_preview_input_is_approved_in_auto_mode() {
+        let preview = "http://127.0.0.1:49152/";
+        let tree = |url| json!({"frame":{"url":url}});
+        assert!(preview_frame(
+            &tree("http://127.0.0.1:49152/docs.html#api"),
+            preview
+        ));
+        assert!(!preview_frame(&tree("http://127.0.0.1:49153/"), preview));
+        assert!(!preview_frame(&tree("https://example.org/"), preview));
+        assert!(!preview_frame(
+            &json!({"frame":{"url":preview},"childFrames":[tree("https://example.org/")]}),
+            preview
+        ));
+        assert!(!review_required(Mode::Auto, "click", || true));
+        assert!(review_required(Mode::Auto, "click", || false));
+        assert!(review_required(Mode::Ask, "click", || true));
+        assert!(review_required(Mode::Auto, "screenshot", || true));
+        assert!(!review_required(Mode::Full, "click", || false));
+    }
+
+    #[test]
     #[ignore = "requires an installed Chromium browser"]
     fn browser_checks_a_local_project_and_returns_an_image() -> Result<()> {
         let root = tempfile::tempdir()?;
@@ -569,6 +624,8 @@ mod tests {
         let response = ureq::get(preview.url()).call()?;
         assert!(response.into_string()?.contains("Add one"));
         browser.call("navigate", &json!({"url":preview.url()}))?;
+        assert!(browser.is_local_preview(preview.url()));
+        assert!(!browser.is_local_preview("http://127.0.0.1:1/"));
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let (tree, _) = browser.call("snapshot", &json!({}))?;

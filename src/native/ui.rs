@@ -1164,6 +1164,7 @@ impl Screen {
     }
 
     pub(super) fn begin_turn(&mut self, started: Instant) {
+        self.notice.clear();
         self.turn = Some(Turn {
             started,
             input: 0,
@@ -1257,17 +1258,26 @@ impl Screen {
             MouseEventKind::Down(MouseButton::Left) => {
                 self.selection = self.viewport.as_ref().and_then(|view| view.begin(mouse));
             }
-            MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let (Some(view), Some(selection)) = (&self.viewport, &mut self.selection) {
+                    let url = selection.release_link(view, mouse);
+                    selection.extend(view, mouse);
+                    if let Some(url) = url {
+                        self.selection = None;
+                        if let Err(error) = selection::open_url(&url) {
+                            self.notice(&error.to_string());
+                        }
+                    }
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
                 if let (Some(view), Some(selection)) = (&self.viewport, &mut self.selection) {
                     selection.extend(view, mouse);
-                    if matches!(mouse.kind, MouseEventKind::Drag(_)) {
-                        if usize::from(mouse.row) <= view.top {
-                            self.scroll = self.scroll.saturating_add(1);
-                        } else if usize::from(mouse.row)
-                            >= view.top + view.rows.len().saturating_sub(1)
-                        {
-                            self.scroll = self.scroll.saturating_sub(1);
-                        }
+                    if usize::from(mouse.row) <= view.top {
+                        self.scroll = self.scroll.saturating_add(1);
+                    } else if usize::from(mouse.row) >= view.top + view.rows.len().saturating_sub(1)
+                    {
+                        self.scroll = self.scroll.saturating_sub(1);
                     }
                 }
             }
@@ -1664,7 +1674,7 @@ impl Screen {
         let mut line = Line::new();
         line.push("Karry", Style::fg(render::FG).bold());
         line.push("Code", Style::fg(render::BRAND).bold());
-        line.push(format!(" v{}", env!("CARGO_PKG_VERSION")), Style::dim());
+        line.push(format!(" v{}", crate::RELEASE_VERSION), Style::dim());
         line
     }
 
@@ -3579,6 +3589,14 @@ mod tests {
         assert_eq!(screen.turn.unwrap().mode, DialogMode::Chat);
         screen.reset_conversation();
         assert_eq!(screen.dialog_mode(), DialogMode::Agent);
+    }
+
+    #[test]
+    fn starting_a_turn_clears_the_previous_status_notice() {
+        let mut screen = test_screen();
+        screen.notice("Enter /continue to resume.");
+        screen.begin_turn(Instant::now());
+        assert!(screen.notice.is_empty());
     }
 
     #[test]

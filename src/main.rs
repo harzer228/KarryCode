@@ -28,6 +28,27 @@ use std::{
     process::ExitCode,
 };
 
+pub(crate) const RELEASE_VERSION: &str =
+    if matches!(env!("CARGO_PKG_VERSION_PATCH").as_bytes(), b"0") {
+        if env!("CARGO_PKG_VERSION_PRE").is_empty() {
+            concat!(
+                env!("CARGO_PKG_VERSION_MAJOR"),
+                ".",
+                env!("CARGO_PKG_VERSION_MINOR")
+            )
+        } else {
+            concat!(
+                env!("CARGO_PKG_VERSION_MAJOR"),
+                ".",
+                env!("CARGO_PKG_VERSION_MINOR"),
+                "-",
+                env!("CARGO_PKG_VERSION_PRE")
+            )
+        }
+    } else {
+        env!("CARGO_PKG_VERSION")
+    };
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -47,12 +68,12 @@ fn run() -> Result<()> {
             "--help" | "-h" => {
                 println!(
                     "KarryCode CLI {}\nAI coding in your terminal.\n\nUsage: karrycode [folder]\n       karrycode --version",
-                    env!("CARGO_PKG_VERSION")
+                    RELEASE_VERSION
                 );
                 return Ok(());
             }
             "--version" | "-V" => {
-                println!("KarryCode CLI {}", env!("CARGO_PKG_VERSION"));
+                println!("KarryCode CLI {RELEASE_VERSION}");
                 return Ok(());
             }
             flag if flag.starts_with('-') => {
