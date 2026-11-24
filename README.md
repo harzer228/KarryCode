@@ -20,6 +20,12 @@ karrycode
 
 The installer checks SHA-256 and adds `karrycode` to your user PATH and the current session. Run it again to update. To choose another project at launch, run `karrycode "D:\My Project"`.
 
+## 11-second quick start
+
+[![Watch KarryCode install, choose a model and build a site](.github/media/demo-cover.png)](https://github.com/harzer228/KarryCode/releases/download/v0.1.0-beta.1/karrycode-quickstart.mp4)
+
+The recording uses a labeled demo model and compresses waiting time. KarryCode performs the file changes and serves the preview locally. [Смотреть на русском](https://github.com/harzer228/KarryCode/releases/download/v0.1.0-beta.1/karrycode-quickstart-ru.mp4)
+
 ## Install on Linux
 
 ```sh

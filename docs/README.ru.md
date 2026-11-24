@@ -13,6 +13,10 @@ irm https://raw.githubusercontent.com/harzer228/KarryCode/main/install.ps1 | iex
 karrycode
 ```
 
+[![Смотреть установку и первый проект в KarryCode](../.github/media/demo-cover-ru.png)](https://github.com/harzer228/KarryCode/releases/download/v0.1.0-beta.1/karrycode-quickstart-ru.mp4)
+
+В 11-секундном ролике используется демо-модель. KarryCode записывает файл сайта и запускает локальный предпросмотр. Ожидание в ролике сокращено. [Watch in English](https://github.com/harzer228/KarryCode/releases/download/v0.1.0-beta.1/karrycode-quickstart.mp4)
+
 Ubuntu или Arch Linux x64:
 
 ```sh
