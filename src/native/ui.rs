@@ -543,11 +543,50 @@ fn newline_key(key: KeyEvent) -> bool {
         || key.code == KeyCode::Char('j') && key.modifiers == KeyModifiers::CONTROL
 }
 
+#[derive(Default)]
+enum Notice {
+    #[default]
+    Empty,
+    Text(String),
+    Localized {
+        ru: &'static str,
+        en: &'static str,
+    },
+}
+
+impl Notice {
+    fn text(&self) -> &str {
+        self.text_in(crate::language::english())
+    }
+
+    fn text_in(&self, english: bool) -> &str {
+        match self {
+            Self::Empty => "",
+            Self::Text(text) => text,
+            Self::Localized { ru, en } => {
+                if english {
+                    en
+                } else {
+                    ru
+                }
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.text().is_empty()
+    }
+
+    fn clear(&mut self) {
+        *self = Self::Empty;
+    }
+}
+
 pub struct Screen {
     editor: Editor,
     pastes: Vec<String>,
     submitted_pastes: Vec<String>,
-    notice: String,
+    notice: Notice,
     scroll: usize,
     details: bool,
     queued: String,
@@ -591,7 +630,7 @@ impl Screen {
             editor: Editor::new(),
             pastes: Vec::new(),
             submitted_pastes: Vec::new(),
-            notice: String::new(),
+            notice: Notice::default(),
             scroll: 0,
             details: false,
             queued: String::new(),
@@ -748,7 +787,24 @@ impl Screen {
         self.background.clear();
     }
     pub fn notice(&mut self, text: &str) {
-        self.notice = render::sanitize(text);
+        self.notice = Notice::Text(render::sanitize(text));
+    }
+
+    pub(super) fn localized_notice(&mut self, ru: &'static str, en: &'static str) {
+        self.notice = Notice::Localized { ru, en };
+    }
+
+    pub(super) fn redraw_language(
+        &mut self,
+        history: &[Message],
+        model: &str,
+        directory: &Path,
+    ) -> Result<()> {
+        if matches!(self.notice, Notice::Text(_)) {
+            self.notice.clear();
+        }
+        self.cache = None;
+        self.draw(history, None, model, directory)
     }
 
     pub fn help(&mut self) -> Result<()> {
@@ -1369,7 +1425,7 @@ impl Screen {
                     .sum(),
             )
         } else {
-            self.notice.clone()
+            self.notice.text().to_owned()
         };
         let menu = self.menu(directory);
         let mut menu_rows = menu.len().clamp(1, MENU_LIMIT);
@@ -3540,7 +3596,7 @@ mod tests {
             editor: Editor::new(),
             pastes: Vec::new(),
             submitted_pastes: Vec::new(),
-            notice: String::new(),
+            notice: Notice::default(),
             scroll: 0,
             details: false,
             queued: String::new(),
@@ -3597,6 +3653,15 @@ mod tests {
         screen.notice("Enter /continue to resume.");
         screen.begin_turn(Instant::now());
         assert!(screen.notice.is_empty());
+    }
+
+    #[test]
+    fn a_visible_notice_can_follow_a_language_change_without_being_reissued() {
+        let mut screen = test_screen();
+        screen.localized_notice("Готов.", "Ready.");
+        assert_eq!(screen.notice.text_in(false), "Готов.");
+        assert_eq!(screen.notice.text_in(true), "Ready.");
+        assert_eq!(screen.notice.text_in(false), "Готов.");
     }
 
     #[test]

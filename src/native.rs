@@ -17,6 +17,7 @@ mod changes;
 mod desktop;
 mod mcp;
 mod models;
+mod onboarding;
 mod permissions;
 mod preview;
 mod project;
@@ -571,6 +572,17 @@ fn move_session(
     sessions.len() - 1
 }
 
+fn no_model_label(state: &State) -> &'static str {
+    if state.connections.is_empty() {
+        tr!(
+            "Добавь провайдера в /provider",
+            "Add a provider in /provider"
+        )
+    } else {
+        tr!("Модель не выбрана · /model", "No model selected · /model")
+    }
+}
+
 pub fn run(
     profile: &mut crate::profile::Profile,
     root: &Path,
@@ -594,6 +606,13 @@ pub fn run(
     let mut current_directory = workspace.canonicalize()?;
     let directory = current_directory.as_path();
     let bundle = root.canonicalize()?;
+    if state.connections.is_empty()
+        && let Some(setup) = onboarding::run(&mut screen, &state)?
+    {
+        setup.apply(&mut state);
+        save(profile.work.path(), &state)?;
+        profile.save()?;
+    }
     let (project, portable) = project_location(&bundle, directory);
     let index = state
         .sessions
@@ -631,15 +650,15 @@ pub fn run(
     }
     let mut hub = mcp::Hub::load(directory);
     if state.connections.is_empty() {
-        screen.notice(tr!(
+        screen.localized_notice(
             "Сначала добавь подключение в /provider, затем модель в /model.",
-            "Add a connection in /provider, then add a model in /model."
-        ));
+            "Add a connection in /provider, then add a model in /model.",
+        );
     } else if hub.statuses().is_empty() && hub.errors().is_empty() {
-        screen.notice(tr!(
+        screen.localized_notice(
             "Готов. /help — команды. История сохраняется на компьютере.",
-            "Ready. /help for commands. History is saved locally."
-        ));
+            "Ready. /help for commands. History is saved locally.",
+        );
     } else {
         let mut summary = hub.summary();
         for error in hub.errors() {
@@ -678,15 +697,7 @@ pub fn run(
         } else {
             screen.set_limits(0, 0, 0, Reasoning::ProviderDefault);
             screen.set_input_estimate(None);
-            if state.connections.is_empty() {
-                tr!(
-                    "Добавь провайдера в /provider",
-                    "Add a provider in /provider"
-                )
-                .into()
-            } else {
-                tr!("Модель не выбрана · /model", "No model selected · /model").into()
-            }
+            no_model_label(&state).into()
         };
         let Some(input) = screen.input(&history, &label, directory, diagnose)? else {
             break;
@@ -718,6 +729,14 @@ pub fn run(
                     profile.work.path(),
                     root,
                     paused,
+                    |screen, state| {
+                        let label = if state.active_provider(screen.dialog_mode()).is_some() {
+                            &label
+                        } else {
+                            no_model_label(state)
+                        };
+                        screen.redraw_language(&history, label, directory)
+                    },
                 ) {
                     Ok(resume_desktop) => {
                         #[cfg(windows)]

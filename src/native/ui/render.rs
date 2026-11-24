@@ -48,6 +48,26 @@ pub const WARN: Color = Color::Rgb {
 pub const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 const MARK: usize = 16;
+// Coverage of the letter (1–4) and dash (a–d), sampled from assets/logo-transparent.svg.
+const MARK_PIXELS: [&[u8; MARK]; MARK] = [
+    b"................",
+    b"1443.....144431.",
+    b"1444....144441..",
+    b"1444...144441...",
+    b"1444..144441....",
+    b"1444.144441.....",
+    b"1444144441......",
+    b"144444441.bdddc.",
+    b"14444441..bdddc.",
+    b"144434113.......",
+    b"1444.1.443......",
+    b"1444...4443.....",
+    b"1444...34443....",
+    b"1444....34443...",
+    b"1443.....24443..",
+    b"................",
+];
+const MARK_DASH: [f32; 3] = [70., 236., 161.];
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
@@ -787,19 +807,11 @@ fn mark_cell(
 }
 
 fn mark_pixel(column: usize, row: usize, shade: [f32; 3], accent: [f32; 3]) -> Option<Color> {
-    let x = column as f32 + 0.5;
-    let y = row as f32 + 0.5;
-    let distance = segment(x, y, (4.2, 3.5), (4.2, 12.5))
-        .min(segment(x, y, (11.2, 3.6), (4.4, 8.1)))
-        .min(segment(x, y, (4.4, 8.1), (11.6, 12.5)));
-    let coverage = (1.55 - distance).clamp(0., 1.);
-    (coverage >= 0.3).then(|| mix(shade, accent, coverage))
-}
-
-fn segment(x: f32, y: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
-    let (px, py, dx, dy) = (x - a.0, y - a.1, b.0 - a.0, b.1 - a.1);
-    let h = ((px * dx + py * dy) / (dx * dx + dy * dy)).clamp(0., 1.);
-    (px - h * dx).hypot(py - h * dy)
+    match MARK_PIXELS[row][column] {
+        pixel @ b'1'..=b'4' => Some(mix(shade, accent, f32::from(pixel - b'0') / 4.)),
+        pixel @ b'a'..=b'd' => Some(mix(shade, MARK_DASH, f32::from(pixel - b'a' + 1) / 4.)),
+        _ => None,
+    }
 }
 
 fn palette(foreground: Option<Color>, background: Option<Color>) -> Style {
@@ -993,6 +1005,14 @@ mod tests {
                 .chars()
                 .all(|c| matches!(c, ' ' | '▀' | '▄' | '█'))
         }));
+        assert_eq!(
+            mark_pixel(12, 7, [0.; 3], [255.; 3]),
+            Some(Color::Rgb {
+                r: 70,
+                g: 236,
+                b: 161,
+            })
+        );
     }
 
     #[test]

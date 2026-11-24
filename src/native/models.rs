@@ -748,7 +748,7 @@ pub(super) fn provider_menu(screen: &mut Screen, state: &mut State) -> Result<bo
                 ),
                 &connection.name,
             )? {
-                state.settings.provider_limits.remove(&connection.id);
+                state.settings.remove_connection(connection.id);
                 state.connections.remove(index);
                 return Ok(true);
             }
@@ -758,7 +758,7 @@ pub(super) fn provider_menu(screen: &mut Screen, state: &mut State) -> Result<bo
     Ok(false)
 }
 
-fn choose_connection(screen: &mut Screen, state: &State) -> Result<Option<u32>> {
+pub(super) fn choose_connection(screen: &mut Screen, state: &State) -> Result<Option<u32>> {
     if state.connections.is_empty() {
         screen.notice(tr!(
             "Сначала добавь подключение через /provider.",
@@ -857,6 +857,7 @@ enum ModelOpening<'a> {
     New,
     Edit { autofill: bool },
     Imported(&'a [CatalogModel]),
+    Setup(&'a [CatalogModel]),
 }
 
 fn edit_settings(
@@ -866,14 +867,21 @@ fn edit_settings(
     opening: ModelOpening<'_>,
     history: &mut Vec<Message>,
 ) -> Result<EditResult> {
-    let (editing, allow_catalog, mut autofill, cached) = match opening {
+    let setup = matches!(opening, ModelOpening::Setup(_));
+    let (editing, allow_catalog, mut autofill, mut cached) = match opening {
         ModelOpening::New => (false, true, false, None),
         ModelOpening::Edit { autofill } => (true, false, autofill, None),
         ModelOpening::Imported(catalog) => (false, false, true, Some(catalog)),
+        ModelOpening::Setup(catalog) => (false, false, false, Some(catalog)),
     };
     let mut fetched = None;
     let mut message = settings.missing_limits().then(|| {
-        if settings.model.is_empty() {
+        if setup {
+            tr!(
+                "Укажи ID и лимиты, которых нет в каталоге.",
+                "Enter the model ID and any limits missing from the catalog."
+            )
+        } else if settings.model.is_empty() {
             tr!(
                 "Введи ID модели или открой каталог через F4.",
                 "Enter a model ID or open the catalog with F4."
@@ -944,6 +952,9 @@ fn edit_settings(
             ModelEdit::Auto(draft) => {
                 settings = draft;
                 fetched = None;
+                if setup && cached.is_some_and(<[CatalogModel]>::is_empty) {
+                    cached = None;
+                }
                 autofill = true;
             }
             ModelEdit::Save(draft) => {
@@ -970,6 +981,80 @@ fn edit_settings(
                 }
             }
         }
+    }
+}
+
+pub(super) fn setup_model(
+    screen: &mut Screen,
+    connection: &Connection,
+) -> Result<Option<ModelSettings>> {
+    let modes = [
+        tr!(
+            "Выбрать модель из каталога",
+            "Choose from the model catalog"
+        )
+        .into(),
+        tr!("Ввести ID модели вручную", "Enter the model ID manually").into(),
+        tr!("Пропустить настройку", "Skip setup").into(),
+    ];
+    let (draft, catalog) = loop {
+        match screen.choose(
+            tr!("3/3 · Модель по умолчанию", "3/3 · Default model"),
+            &modes,
+        )? {
+            Some(0) => {
+                let title = tr!("Каталог моделей", "Model catalog");
+                screen.busy(tr!(
+                    "Загружаю каталог моделей…",
+                    "Loading the model catalog…"
+                ))?;
+                match catalog(connection) {
+                    Ok(models) if !models.is_empty() => {
+                        let available: Vec<_> = models.iter().collect();
+                        if let Some(indices) = screen.catalog_picker(&available, false)? {
+                            break (models[indices[0]].settings(connection), models);
+                        }
+                    }
+                    Ok(_) => {
+                        screen.report(
+                            title,
+                            tr!(
+                                "Провайдер не вернул список моделей. Введи ID вручную.",
+                                "The provider returned no models. Enter the model ID manually."
+                            ),
+                        )?;
+                        break (ModelSettings::default(), Vec::new());
+                    }
+                    Err(error) => {
+                        screen.report(
+                            title,
+                            &trf!(
+                                "Не удалось загрузить каталог. Введи ID вручную.\n\n{error}",
+                                "Couldn't load the catalog. Enter the model ID manually.\n\n{error}"
+                            ),
+                        )?;
+                        break (ModelSettings::default(), Vec::new());
+                    }
+                }
+            }
+            Some(1) => break (ModelSettings::default(), Vec::new()),
+            _ => return Ok(None),
+        }
+    };
+    let mut errors = Vec::new();
+    let choice = edit_settings(
+        screen,
+        connection,
+        draft,
+        ModelOpening::Setup(&catalog),
+        &mut errors,
+    )?;
+    for error in &errors {
+        screen.report(tr!("Каталог моделей", "Model catalog"), &error.content)?;
+    }
+    match choice {
+        EditResult::Saved(settings) => Ok(Some(settings)),
+        _ => Ok(None),
     }
 }
 
@@ -1004,7 +1089,7 @@ fn import_catalog(
         });
         return Ok(Vec::new());
     }
-    let Some(indices) = screen.catalog_picker(&available)? else {
+    let Some(indices) = screen.catalog_picker(&available, true)? else {
         return Ok(Vec::new());
     };
     let mut drafts = Vec::new();
@@ -1049,7 +1134,7 @@ fn import_catalog(
     Ok(drafts)
 }
 
-fn add_models(state: &mut State, connection: u32, settings: Vec<ModelSettings>) -> bool {
+pub(super) fn add_models(state: &mut State, connection: u32, settings: Vec<ModelSettings>) -> bool {
     if settings.is_empty() {
         return false;
     }

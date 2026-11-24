@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="KarryCode">
-  <rect width="100" height="100" rx="22" fill="#202725"/>
-  <path d="M28 23v54M68 24 29 52l42 25" stroke="#b8e4bc" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-  <path d="M63 52h13" stroke="#82a98a" stroke-width="6" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" fill="none">
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="#0B0E0D" stroke="#363B39" stroke-width="6"/>
+  <path d="M 112 118 H 176 V 242 L 300 118 H 390 L 202 306 L 176 280 V 394 H 112 Z" fill="#FFFFFF"/>
+  <path d="M 262 274 L 382 394 H 292 L 236 338 V 300 Z" fill="#FFFFFF"/>
+  <rect x="302" y="238" width="100" height="36" rx="18" fill="#46ECA1"/>
 </svg>

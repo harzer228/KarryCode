@@ -272,11 +272,31 @@ impl Screen {
         id: u32,
         saved: Option<&Connection>,
     ) -> Result<Option<Connection>> {
+        self.connection_form(id, saved, false)
+    }
+
+    pub(in crate::native) fn setup_connection(
+        &mut self,
+        preset: &Connection,
+    ) -> Result<Option<Connection>> {
+        self.connection_form(preset.id, Some(preset), true)
+    }
+
+    fn connection_form(
+        &mut self,
+        id: u32,
+        saved: Option<&Connection>,
+        onboarding: bool,
+    ) -> Result<Option<Connection>> {
         let mut name = Editor::from(saved.map_or("", |provider| provider.name.as_str()));
         let mut url = Editor::from(saved.map_or("", |provider| provider.url.as_str()));
         let mut protocol = saved.map_or(Protocol::default(), |provider| provider.protocol);
         let mut key = Editor::new();
-        let mut focus = 0;
+        let mut focus = if onboarding {
+            if url.is_empty() { 2 } else { 3 }
+        } else {
+            0
+        };
         let mut without_key = false;
         let mut error = None;
         loop {
@@ -285,7 +305,7 @@ impl Screen {
                     && protocol == provider.protocol
             });
             let previous_key = saved
-                .filter(|_| same_route && !without_key)
+                .filter(|_| same_route && !without_key && !onboarding)
                 .map(|provider| provider.key.as_str());
             let hint = if previous_key.is_some_and(|key| !key.is_empty()) {
                 tr!("сохранён ••••", "saved ••••")
@@ -314,15 +334,24 @@ impl Screen {
                 lines.push(Line::of(format!(" ! {message}"), Style::fg(render::WARN)));
             }
             self.draw_panel(
-                if saved.is_some() {
+                if onboarding {
+                    tr!("2/3 · Подключение", "2/3 · Connection")
+                } else if saved.is_some() {
                     tr!("Изменить провайдера", "Edit provider")
                 } else {
                     tr!("Новый провайдер", "New provider")
                 },
-                tr!(
-                    " Tab · ←→ протокол · F4 без ключа · Enter сохранить · Esc ",
-                    " Tab · ←→ protocol · F4 no key · Enter save · Esc "
-                ),
+                if onboarding {
+                    tr!(
+                        " Tab · ←→ протокол · F4 без ключа · Enter далее · Esc ",
+                        " Tab · ←→ protocol · F4 no key · Enter next · Esc "
+                    )
+                } else {
+                    tr!(
+                        " Tab · ←→ протокол · F4 без ключа · Enter сохранить · Esc ",
+                        " Tab · ←→ protocol · F4 no key · Enter save · Esc "
+                    )
+                },
                 &lines,
                 0,
                 cursor,
@@ -894,6 +923,7 @@ impl Screen {
     pub(in crate::native) fn catalog_picker(
         &mut self,
         models: &[&CatalogModel],
+        multiple: bool,
     ) -> Result<Option<Vec<usize>>> {
         let mut query = Editor::new();
         let mut selected = 0usize;
@@ -910,11 +940,15 @@ impl Screen {
                 })
                 .collect();
             selected = selected.min(matches.len().saturating_sub(1));
-            let badge = trf!(
-                "Выбрано {} · Поиск: ",
-                "{} selected · Search: ",
-                marked_rows.iter().filter(|&&item| item).count()
-            );
+            let badge = if multiple {
+                trf!(
+                    "Выбрано {} · Поиск: ",
+                    "{} selected · Search: ",
+                    marked_rows.iter().filter(|&&item| item).count()
+                )
+            } else {
+                tr!("Поиск: ", "Search: ").into()
+            };
             let (shown, caret) = query.view(panel_width()?.saturating_sub(badge.width()).max(1));
             let mut heading = Line::of(&badge, Style::dim());
             heading.push(shown, Style::fg(render::FG));
@@ -922,11 +956,17 @@ impl Screen {
             let visible = visible_rows()? - 1;
             scroll = scroll_to(selected, scroll, matches.len(), visible);
             for (row, (index, model)) in matches.iter().enumerate().skip(scroll).take(visible) {
-                let check = if marked_rows[*index] { "[x]" } else { "[ ]" };
-                let text = if model.name == model.id {
-                    format!("{check} {}", model.id)
+                let check = if !multiple {
+                    ""
+                } else if marked_rows[*index] {
+                    "[x] "
                 } else {
-                    format!("{check} {} · {}", model.id, model.name)
+                    "[ ] "
+                };
+                let text = if model.name == model.id {
+                    format!("{check}{}", model.id)
+                } else {
+                    format!("{check}{} · {}", model.id, model.name)
                 };
                 lines.push(marked(&text, row == selected));
             }
@@ -938,10 +978,17 @@ impl Screen {
             }
             self.draw_panel(
                 tr!("Каталог моделей", "Model catalog"),
-                tr!(
-                    " Текст поиск · ↑↓ выбор · Tab отметить · Enter добавить · Esc ",
-                    " Type to search · ↑↓ select · Tab mark · Enter add · Esc "
-                ),
+                if multiple {
+                    tr!(
+                        " Текст поиск · ↑↓ выбор · Tab отметить · Enter добавить · Esc ",
+                        " Type to search · ↑↓ select · Tab mark · Enter add · Esc "
+                    )
+                } else {
+                    tr!(
+                        " Текст поиск · ↑↓ выбор · Enter далее · Esc ",
+                        " Type to search · ↑↓ select · Enter next · Esc "
+                    )
+                },
                 &lines,
                 0,
                 Some((0, badge.width() + caret)),
@@ -957,7 +1004,7 @@ impl Screen {
                         KeyCode::PageDown => {
                             selected = (selected + visible).min(matches.len().saturating_sub(1))
                         }
-                        KeyCode::Tab => {
+                        KeyCode::Tab if multiple => {
                             if let Some((index, _)) = matches.get(selected) {
                                 marked_rows[*index] = !marked_rows[*index];
                             }
