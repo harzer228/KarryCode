@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $KarryFixtureBinary = (Resolve-Path -LiteralPath $Executable).Path
 $KarryFixtureHash = (Get-FileHash -LiteralPath $KarryFixtureBinary -Algorithm SHA256).Hash.ToLowerInvariant()
 $KarryFixtureTag = "v$Version"
+$KarryFixtureMode = ' '
 
 function Invoke-WebRequest {
     param([string] $Uri, [switch] $UseBasicParsing, [string] $OutFile)
@@ -16,7 +17,7 @@ function Invoke-WebRequest {
     $latest = "$base/latest/download"
     $pinned = "$base/download/$KarryFixtureTag"
     if ($Uri -cin @("$latest/SHA256SUMS", "$pinned/SHA256SUMS")) {
-        Set-Content -LiteralPath $OutFile -Encoding ascii -Value "$KarryFixtureHash  karrycode-windows-x64.exe"
+        Set-Content -LiteralPath $OutFile -Encoding ascii -Value "$KarryFixtureHash ${KarryFixtureMode}karrycode-windows-x64.exe"
     } elseif ($Uri -cin @("$latest/karrycode-windows-x64.exe", "$pinned/karrycode-windows-x64.exe")) {
         Copy-Item -LiteralPath $KarryFixtureBinary -Destination $OutFile
     } else {
@@ -43,6 +44,7 @@ try {
         throw 'The installed karrycode was not on the current PATH.'
     }
     if ((& karrycode --version) -cne "KarryCode CLI $Version") { throw 'Unexpected version.' }
+    $KarryFixtureMode = '*'
     & $installer -Version $KarryFixtureTag -NoUserPath
     $original = (Get-FileHash -LiteralPath $expected -Algorithm SHA256).Hash
     $KarryFixtureHash = '0' * 64

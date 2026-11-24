@@ -69,7 +69,8 @@ jobs:
             tar -C "$dir" -czf "release-assets/$ASSET" karrycode
           fi
           cd release-assets
-          sha256sum "$ASSET" > "$ASSET.sha256"
+          digest=$(sha256sum --binary "$ASSET" | cut -d ' ' -f 1)
+          printf '%s  %s\n' "$digest" "$ASSET" > "$ASSET.sha256"
       - name: Check the Windows installer contract
         if: runner.os == 'Windows'
         shell: pwsh

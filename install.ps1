@@ -59,7 +59,8 @@ $sums = Join-Path $bin "$nonce.sha256"
 $backup = Join-Path $bin "$nonce.previous"
 try {
     Invoke-WebRequest -Uri "$base/SHA256SUMS" -UseBasicParsing -OutFile $sums
-    $checksumLines = @(Get-Content -LiteralPath $sums | Where-Object { $_ -cmatch ('^[a-fA-F0-9]{64}  ' + [regex]::Escape($assetName) + '$') })
+    $checksumPattern = '^[a-fA-F0-9]{64} [ *]' + [regex]::Escape($assetName) + '$'
+    $checksumLines = @(Get-Content -LiteralPath $sums | Where-Object { $_ -cmatch $checksumPattern })
     if ($checksumLines.Count -ne 1) { throw "The release has no unique SHA-256 for $assetName." }
     $sha = $checksumLines[0].Substring(0, 64)
     Invoke-WebRequest -Uri "$base/$assetName" -UseBasicParsing -OutFile $download
