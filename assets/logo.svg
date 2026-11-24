@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="KarryCode">
+  <rect width="100" height="100" rx="22" fill="#202725"/>
+  <path d="M28 23v54M68 24 29 52l42 25" stroke="#b8e4bc" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M63 52h13" stroke="#82a98a" stroke-width="6" stroke-linecap="round"/>
+</svg>

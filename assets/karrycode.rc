@@ -1,0 +1,18 @@
+1 ICON "assets/karrycode.ico"
+
+1 VERSIONINFO
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "KarryCode CLI"
+            VALUE "ProductName", "KarryCode CLI"
+            VALUE "OriginalFilename", "karrycode.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

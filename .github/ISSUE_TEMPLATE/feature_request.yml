@@ -1,0 +1,10 @@
+name: Feature request
+description: Suggest a change to KarryCode.
+body:
+  - type: textarea
+    id: scenario
+    attributes:
+      label: What are you trying to do?
+      description: Describe the scenario and how the proposed change helps.
+    validations:
+      required: true

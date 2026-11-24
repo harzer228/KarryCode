@@ -1,0 +1,8 @@
+/target/
+/dist/
+*.age
+*.dpapi
+.env
+.env.*
+*.log
+__pycache__/

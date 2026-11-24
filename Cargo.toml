@@ -1,0 +1,51 @@
+[package]
+name = "karrycode"
+version = "0.1.0-beta.1"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+default-run = "karrycode"
+
+[dependencies]
+age = "0.12.1"
+anyhow = "1"
+crossterm = { version = "0.29", default-features = false, features = ["bracketed-paste", "events", "windows"] }
+getrandom = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+tempfile = "3"
+unicode-width = "0.2"
+url = "2"
+ureq = { version = "2.12", features = ["tls"], default-features = false }
+tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+base64 = "0.22.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Security_Cryptography", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_SystemServices", "Win32_System_StationsAndDesktops", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_Diagnostics_Debug", "Win32_System_LibraryLoader", "Win32_System_Registry", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+rpassword = "7"
+xattr = "1"
+zbus = "5"
+
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "3"
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[workspace]
+resolver = "3"
+
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
