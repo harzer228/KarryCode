@@ -34,15 +34,8 @@ pub fn private_dir() -> Result<tempfile::TempDir> {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::*;
-    use anyhow::ensure;
     use std::fs;
-    use std::{
-        ffi::CString,
-        os::unix::{
-            ffi::OsStrExt,
-            fs::{MetadataExt, PermissionsExt},
-        },
-    };
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
     pub fn is_elevated() -> Result<bool> {
         Ok(unsafe { libc::getuid() == 0 || libc::geteuid() == 0 })

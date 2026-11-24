@@ -8,7 +8,7 @@ use std::{
 };
 use zbus::{
     blocking::{Connection, Proxy},
-    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value},
+    zvariant::{OwnedObjectPath, OwnedValue, Value},
 };
 
 const SERVICE: &str = "org.freedesktop.secrets";
@@ -114,7 +114,7 @@ fn keyring_key(identity: &str, create: bool) -> Result<SecretString> {
             ("org.freedesktop.Secret.Item.Attributes", Value::from(attrs)),
         ]);
         let value = (
-            session.as_ref() as &ObjectPath<'_>,
+            session.as_ref(),
             Vec::<u8>::new(),
             secret.expose_secret().as_bytes(),
             "text/plain",

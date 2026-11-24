@@ -43,12 +43,14 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist
           Copy-Item target/x86_64-pc-windows-msvc/release/karrycode.exe dist/karrycode-windows-x64.exe
-          ./dist/karrycode-windows-x64.exe --version
+          $version = ((./dist/karrycode-windows-x64.exe --version) -split ' ')[-1]
+          Write-Output $version
           ./dist/karrycode-windows-x64.exe --help
           $tokens = $null
           $errors = $null
           $null = [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path install.ps1), [ref]$tokens, [ref]$errors)
           if ($errors) { throw ($errors | Out-String) }
+          ./tests/install.ps1 -Executable ./dist/karrycode-windows-x64.exe -Version $version
       - name: Check and package Linux executable
         if: runner.os == 'Linux'
         run: |
