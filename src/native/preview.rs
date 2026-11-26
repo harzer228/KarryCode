@@ -81,6 +81,9 @@ impl Drop for Preview {
 }
 fn handle(mut stream: TcpStream, root: &Path) -> Result<()> {
     use std::io::Read as _;
+    // On Windows an accepted socket inherits the listener's non-blocking mode, which
+    // would make reads fail with WouldBlock instead of honoring the timeouts below.
+    stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
     stream.set_write_timeout(Some(Duration::from_millis(500)))?;
     let mut reader = BufReader::new(&stream).take(8192);
