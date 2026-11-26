@@ -21,7 +21,7 @@ impl Preview {
     pub fn start(root: &Path) -> Result<Self> {
         let root = root.canonicalize()?;
         ensure!(
-            super::safe_path(&root, "index.html").is_ok_and(|path| path.is_file()),
+            super::files::safe_path(&root, "index.html").is_ok_and(|path| path.is_file()),
             "No index.html in the selected folder"
         );
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
@@ -127,7 +127,7 @@ fn serve(root: &Path, rel: &str) -> Result<(u16, &'static str, Vec<u8>)> {
                 || matches!(part, "profile" | "auth.json")),
         "Invalid preview path"
     );
-    let path: PathBuf = super::safe_path(root, rel)?;
+    let path: PathBuf = super::files::safe_path(root, rel)?;
     let kind = match path.extension().and_then(|s| s.to_str()).unwrap_or("") {
         "html" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",

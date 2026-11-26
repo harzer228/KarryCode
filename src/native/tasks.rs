@@ -30,7 +30,8 @@ fn command(task: &str) -> Result<(&'static str, Vec<&'static str>)> {
     })
 }
 pub(super) fn available(directory: &Path) -> Vec<&'static str> {
-    let has = |name: &str| super::safe_path(directory, name).is_ok_and(|path| path.is_file());
+    let has =
+        |name: &str| super::files::safe_path(directory, name).is_ok_and(|path| path.is_file());
     let mut tasks = Vec::new();
     if has("Cargo.toml") {
         tasks.extend([
@@ -41,7 +42,7 @@ pub(super) fn available(directory: &Path) -> Vec<&'static str> {
             "cargo-fetch",
         ]);
     }
-    if let Ok(text) = super::read_file(directory, "package.json")
+    if let Ok(text) = super::files::read_file(directory, "package.json")
         && let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text)
     {
         for (name, task) in [

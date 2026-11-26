@@ -1,10 +1,9 @@
 //! Saved connections and models, legacy profiles, and provider catalogs.
 
 use super::{
-    Message, Provider, Reasoning, ReasoningApi, Session, State, apply_reasoning, chat_error,
-    endpoint,
+    Message, Provider, Reasoning, ReasoningApi, Session, State, chat_error, endpoint,
     permissions::DialogMode,
-    probe_provider, provider_transport_error,
+    provider::{apply_reasoning, probe_provider, provider_transport_error},
     ui::{ModelAction, ModelEdit, Screen},
     web,
 };
