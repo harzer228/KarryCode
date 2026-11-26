@@ -10,6 +10,7 @@ macro_rules! trf {
     };
 }
 
+mod cli;
 mod folders;
 mod identity;
 mod language;
@@ -23,8 +24,7 @@ mod vault;
 use anyhow::{Context, Result, ensure};
 use std::{
     env, fs,
-    io::{self, IsTerminal, Write},
-    path::PathBuf,
+    io::{self, IsTerminal, Read, Write},
     process::ExitCode,
 };
 
@@ -60,40 +60,46 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let mut args = env::args_os().skip(1);
-    let first = args.next();
-    ensure!(args.next().is_none(), "Usage: karrycode [folder]");
-    if let Some(flag) = first.as_deref().and_then(|value| value.to_str()) {
-        match flag {
-            "--help" | "-h" => {
-                println!(
-                    "KarryCode CLI {}\nAI coding in your terminal.\n\nUsage: karrycode [folder]\n       karrycode --version",
-                    RELEASE_VERSION
-                );
-                return Ok(());
-            }
-            "--version" | "-V" => {
-                println!("KarryCode CLI {RELEASE_VERSION}");
-                return Ok(());
-            }
-            flag if flag.starts_with('-') => {
-                anyhow::bail!("Unknown option: {flag}. Run karrycode --help.")
-            }
-            _ => {}
+    let (folder, print) = match cli::parse(env::args_os().skip(1))? {
+        cli::Command::Help => {
+            println!(
+                "KarryCode CLI {}\nAI coding in your terminal.\n\n{}",
+                RELEASE_VERSION,
+                cli::USAGE
+            );
+            return Ok(());
         }
-    }
+        cli::Command::Version => {
+            println!("KarryCode CLI {RELEASE_VERSION}");
+            return Ok(());
+        }
+        cli::Command::Run { folder, print } => (folder, print),
+    };
     let root = platform::app_dir()?;
     language::load(&root);
     platform::require_standard_user()?;
-    ensure!(
-        io::stdin().is_terminal() && io::stdout().is_terminal(),
-        tr!(
-            "Открой KarryCode в интерактивном терминале.",
-            "Open KarryCode in an interactive terminal."
-        )
-    );
-    let mut workspace = first
-        .map(PathBuf::from)
+    let task = match print {
+        Some(cli::Task::Text(text)) => Some(cli::task_text(&text)?),
+        Some(cli::Task::Stdin) => {
+            let mut text = String::new();
+            io::stdin().read_to_string(&mut text).context(tr!(
+                "Не удалось прочитать задачу из stdin",
+                "Could not read the task from stdin"
+            ))?;
+            Some(cli::task_text(&text)?)
+        }
+        None => {
+            ensure!(
+                io::stdin().is_terminal() && io::stdout().is_terminal(),
+                tr!(
+                    "Открой KarryCode в интерактивном терминале или передай задачу через -p.",
+                    "Open KarryCode in an interactive terminal, or pass a task with -p."
+                )
+            );
+            None
+        }
+    };
+    let mut workspace = folder
         .unwrap_or(env::current_dir()?)
         .canonicalize()
         .context(tr!(
@@ -121,20 +127,34 @@ fn run() -> Result<()> {
             "Choose a project folder outside the KarryCode profile."
         )
     );
+    ensure!(
+        task.is_none() || root.join("profile-id.json").exists(),
+        "{}",
+        setup_first()
+    );
     if !root.join("profile-id.json").exists()
         && let Err(error) = identity::init(&root)
         && !root.join("profile-id.json").exists()
     {
         return Err(error);
     }
-    let mut profile = profile::Profile::open(&root)?;
-    profile.recent.remember(&root, &workspace);
-    let session = native::run(&mut profile, &root, &mut workspace);
+    let mut profile = profile::Profile::open(&root, task.is_none())?;
+    if task.is_none() {
+        profile.recent.remember(&root, &workspace);
+    }
+    let session = native::run(&mut profile, &root, &mut workspace, task);
     let saved = profile.save();
     let closed = profile.close();
     saved?;
     closed?;
     session
+}
+
+pub(crate) fn setup_first() -> &'static str {
+    tr!(
+        "Провайдер и модель не настроены. Сначала запусти karrycode интерактивно и выбери их.",
+        "No provider and model are set up. Run karrycode interactively first to choose them."
+    )
 }
 
 fn prompt(message: &str) -> Result<Option<String>> {

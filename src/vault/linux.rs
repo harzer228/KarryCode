@@ -163,8 +163,11 @@ fn password(fresh: bool) -> Result<SecretString> {
     Ok(secret)
 }
 
+// The prompt goes to the terminal rather than stdout so that `-p` output stays clean.
 fn read_secret(message: &str) -> Result<SecretString> {
-    print!("{message}");
-    io::stdout().flush()?;
-    Ok(SecretString::from(rpassword::read_password()?))
+    let secret = rpassword::prompt_password(message).context(tr!(
+        "Пароль профиля можно ввести только в терминале. Запусти KarryCode из терминала.",
+        "The profile password can only be entered in a terminal. Run KarryCode from a terminal."
+    ))?;
+    Ok(SecretString::from(secret))
 }

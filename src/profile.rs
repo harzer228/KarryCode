@@ -40,7 +40,7 @@ pub struct Profile {
 }
 
 impl Profile {
-    pub fn open(root: &Path) -> Result<Self> {
+    pub fn open(root: &Path, interactive: bool) -> Result<Self> {
         let marker = crate::identity::read_marker(root)?;
         let folder = root.join("profile");
         fs::create_dir_all(&folder)?;
@@ -68,6 +68,7 @@ impl Profile {
             fingerprint(&slot_path(&folder, 1))?,
         ];
         let fresh = observed.iter().all(Option::is_none);
+        ensure!(interactive || !fresh, "{}", crate::setup_first());
         let secret = crate::vault::unlock(&folder, &marker.id, fresh)?;
         let mut work = crate::platform::private_dir()?;
         let mut active: Option<Saved> = None;
@@ -105,13 +106,19 @@ impl Profile {
             )
         );
         if unreadable {
-            println!(
-                "{}",
+            let warning = tr!(
+                "Один снимок не читается. Доступен другой сохранённый снимок.",
+                "One snapshot is unreadable. Another saved snapshot is available."
+            );
+            ensure!(
+                interactive,
+                "{warning} {}",
                 tr!(
-                    "Один снимок не читается. Доступен другой сохранённый снимок.",
-                    "One snapshot is unreadable. Another saved snapshot is available."
+                    "Открой KarryCode интерактивно, чтобы подтвердить его использование.",
+                    "Open KarryCode interactively to confirm using it."
                 )
             );
+            println!("{warning}");
             ensure!(
                 crate::ask(tr!(
                     "Открыть доступный снимок? [y/N] ",
@@ -235,6 +242,21 @@ impl Profile {
     pub fn close(self) -> Result<()> {
         self.work.close()?;
         Ok(())
+    }
+
+    /// An unlocked, never-saved profile for tests that drive the agent loop.
+    #[cfg(test)]
+    pub fn scratch(root: &Path) -> Result<Self> {
+        Ok(Self {
+            root: root.to_owned(),
+            id: "scratch".into(),
+            secret: SecretString::from("x".repeat(43)),
+            _lock: File::create(root.join("scratch.lock"))?,
+            active: None,
+            observed: [None, None],
+            recent: RecentFolders::default(),
+            work: tempfile::tempdir()?,
+        })
     }
 }
 

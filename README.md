@@ -60,6 +60,19 @@ The scripts verify the downloaded file against the release's SHA-256 manifest. R
 | `/skills` and `/mcp` | Discover skills and manage MCP servers |
 | `/help` | List chat commands and key bindings |
 
+## Scripts and CI
+
+Run one task without the interactive console. With `-p -` the task is read from stdin:
+
+```sh
+karrycode path/to/project -p "Add a test for the date parser"
+karrycode -p - < task.md
+```
+
+`-p` (`--print`) uses the provider and model selected in your profile with the default *Approve for me* (Auto) approval mode. The final reply goes to stdout, tool names and errors go to stderr, and the exit code is 0 only when the agent finishes with a reply. Nothing that needs a confirmation runs: commands without isolation, destructive changes, permission requests, questions, MCP calls, subagents and desktop control are declined as if you pressed Esc. Sandboxed commands and reversible edits still run. The run is a temporary chat, so it does not appear in saved conversations.
+
+Run `karrycode` interactively once to choose a provider and model first. On Linux, a profile protected by a password still needs a terminal to unlock it. A Secret Service keyring or Windows DPAPI unlocks without one.
+
 ## Requirements
 
 | Platform | Supported tools |
