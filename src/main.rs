@@ -99,13 +99,15 @@ fn run() -> Result<()> {
             None
         }
     };
-    let mut workspace = folder
-        .unwrap_or(env::current_dir()?)
-        .canonicalize()
-        .context(tr!(
-            "Не удалось открыть папку проекта",
-            "Could not open the project folder"
-        ))?;
+    let mut workspace = match folder {
+        Some(folder) => folder,
+        None => env::current_dir()?,
+    }
+    .canonicalize()
+    .context(tr!(
+        "Не удалось открыть папку проекта",
+        "Could not open the project folder"
+    ))?;
     ensure!(
         workspace.is_dir(),
         tr!("Укажи папку проекта.", "Specify a project folder.")
