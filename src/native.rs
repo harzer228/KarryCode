@@ -14,6 +14,7 @@ use std::{
 };
 mod browser;
 mod changes;
+mod compact;
 mod desktop;
 mod headless;
 mod mcp;
@@ -237,6 +238,8 @@ struct Message {
     display: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     receipt: Option<ui::Receipt>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    summary: bool,
 }
 #[derive(Serialize, Deserialize)]
 struct State {
@@ -1103,7 +1106,7 @@ pub fn run(
                         let name: String = session
                             .messages
                             .iter()
-                            .find(|msg| msg.role == "user")
+                            .find(|msg| msg.role == "user" && !msg.summary)
                             .and_then(|msg| msg.content.lines().next())
                             .unwrap_or(tr!("Новый чат", "New chat"))
                             .chars()
@@ -1172,6 +1175,36 @@ pub fn run(
                 screen.set_dialog_mode(mode);
                 if !temporary {
                     state.sessions[index].messages.clear();
+                    save(profile.work.path(), &state)?;
+                    profile.save()?;
+                }
+                continue;
+            }
+            "/compact" => {
+                let Some(provider) = state.active_provider(screen.dialog_mode()) else {
+                    screen.notice(tr!("Выбери модель в /model.", "Choose a model in /model."));
+                    continue;
+                };
+                let mode = state.request_mode(&provider, diagnose, planning);
+                let extra = if planning {
+                    String::new()
+                } else {
+                    prompt_extra(&skills, &hub, directory, screen.permission_mode())
+                };
+                let outcome = compact::run(
+                    &mut screen,
+                    &provider,
+                    &mut history,
+                    &mut wire,
+                    compact::Trigger::Manual,
+                    |messages, wire| {
+                        input_estimate(&prepare_work_request(
+                            &provider, messages, mode, &extra, wire,
+                        ))
+                    },
+                )?;
+                if outcome == compact::Outcome::Compacted && !temporary {
+                    state.sessions[index].messages = history.clone();
                     save(profile.work.path(), &state)?;
                     profile.save()?;
                 }
@@ -1409,6 +1442,7 @@ pub fn run(
         let mut settings_changed = false;
         let mut step = 0;
         let mut stream_retries = 0;
+        let mut compacted_step = None;
         while step < MAX_TOOL_ROUNDS {
             let provider = turn_provider.clone();
             let messages = history.clone();
@@ -1417,13 +1451,29 @@ pub fn run(
             } else {
                 prompt_extra(&skills, &hub, directory, screen.permission_mode())
             };
-            let prepared = prepare_work_request(
-                &provider,
-                &messages,
-                state.request_mode(&provider, diagnose, planning),
-                &extra,
-                &wire,
-            );
+            let mode = state.request_mode(&provider, diagnose, planning);
+            let mut prepared = prepare_work_request(&provider, &messages, mode, &extra, &wire);
+            if compacted_step != Some(step) && compact::needed(&provider, &prepared) {
+                compacted_step = Some(step);
+                match compact::run(
+                    &mut screen,
+                    &provider,
+                    &mut history,
+                    &mut wire,
+                    compact::Trigger::Auto,
+                    |messages, wire| {
+                        input_estimate(&prepare_work_request(
+                            &provider, messages, mode, &extra, wire,
+                        ))
+                    },
+                )? {
+                    compact::Outcome::Compacted => {
+                        prepared = prepare_work_request(&provider, &history, mode, &extra, &wire);
+                    }
+                    compact::Outcome::Canceled => break,
+                    compact::Outcome::Skipped => {}
+                }
+            }
             screen.set_input_estimate(input_estimate(&prepared));
             let mut plan = match prepared {
                 Ok(plan) => plan,
@@ -3435,13 +3485,9 @@ fn prepare_work_request(
         .filter(|message| message.for_provider())
         .map(|message| message.content.len())
         .sum();
-    ensure!(
-        total <= 512 * 1024,
-        tr!(
-            "Диалог превышает 512 КиБ. Начни /new или приложи меньшие фрагменты.",
-            "Conversation exceeds 512 KiB. Start /new or attach smaller excerpts."
-        )
-    );
+    if total > compact::HISTORY_BYTES {
+        return Err(compact::HistoryTooLarge.into());
+    }
     let mut messages: Vec<Value> = history
         .iter()
         .filter(|message| message.for_provider())
@@ -3511,8 +3557,8 @@ struct InputLimitExceeded {
 impl std::fmt::Display for InputLimitExceeded {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&trf!(
-            "Вход модели ~{} токенов, а лимит {}. Начни /new, очисти историю или уменьши вложения. Лимит входа меняется в /model.",
-            "Model input is ~{} tokens but the limit is {}. Start /new, clear history or attach less. The input limit is edited in /model.",
+            "Вход модели ~{} токенов, а лимит {}. Введи /compact, начни /new или уменьши вложения. Лимит входа меняется в /model.",
+            "Model input is ~{} tokens but the limit is {}. Use /compact, start /new or attach less. The input limit is edited in /model.",
             self.estimated,
             self.limit
         ))
@@ -4579,7 +4625,13 @@ mod tests {
         ] {
             assert!(!permissions::plan_allows_command(command));
         }
-        for command in ["/code", "/plan cancel", "/exit", "Read the project"] {
+        for command in [
+            "/code",
+            "/plan cancel",
+            "/compact",
+            "/exit",
+            "Read the project",
+        ] {
             assert!(permissions::plan_allows_command(command));
         }
     }
@@ -5214,6 +5266,7 @@ mod provider_tests {
         assert_eq!(provider.reasoning_api, ReasoningApi::Auto);
         let message: Message = serde_json::from_str("{\"role\":\"user\",\"content\":\"x\"}")?;
         assert!(message.reasoning.is_none());
+        assert!(!message.summary);
         Ok(())
     }
 }

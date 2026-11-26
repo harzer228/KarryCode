@@ -56,6 +56,7 @@ The scripts verify the downloaded file against the release's SHA-256 manifest. R
 | --- | --- |
 | `/permissions` | Manage chat mode and action approvals |
 | `/plan` and `/code` | Prepare and review a plan before implementation |
+| `/compact` | Summarize older messages to free context. KarryCode also compacts automatically when a request nears the model's input limit |
 | `/setting` | Change language, theme, desktop access, subagent limit and parallel requests per connection |
 | `/skills` and `/mcp` | Discover skills and manage MCP servers |
 | `/help` | List chat commands and key bindings |

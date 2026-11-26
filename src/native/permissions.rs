@@ -48,6 +48,7 @@ pub(super) fn plan_allows_command(command: &str) -> bool {
                 | "/sessions"
                 | "/temporary"
                 | "/clear"
+                | "/compact"
         )
         || command.starts_with("/reasoning ")
         || command.starts_with("/cd ")

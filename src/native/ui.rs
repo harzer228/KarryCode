@@ -46,7 +46,7 @@ const INPUT_LIMIT: usize = 64 * 1024;
 const PASTE_LIMIT: usize = 192 * 1024;
 
 /// Commands offered by the slash menu. Descriptions are localized.
-fn commands() -> [(&'static str, &'static str); 29] {
+fn commands() -> [(&'static str, &'static str); 30] {
     [
         ("/theme", tr!("Оформление агента", "Agent appearance")),
         (
@@ -147,6 +147,13 @@ fn commands() -> [(&'static str, &'static str); 29] {
         (
             "/clear",
             tr!("Удалить текущую историю", "Delete the current history"),
+        ),
+        (
+            "/compact",
+            tr!(
+                "Сжать старую часть диалога в сводку",
+                "Summarize older messages to free context"
+            ),
         ),
         (
             "/undo",
@@ -3486,6 +3493,8 @@ fn history_lines(
                     width,
                 ));
             }
+        } else if message.summary {
+            lines.extend(summary_lines(&message.content, width, details));
         } else if message.content.starts_with("Tool result") {
             lines.extend(tool_lines(&message.content, width, details));
         } else {
@@ -3555,6 +3564,30 @@ fn tool_lines(content: &str, width: usize, details: bool) -> Vec<Line> {
     }
     if body.lines().nth(60).is_some() {
         lines.push(Line::of("    …", Style::dim()));
+    }
+    lines
+}
+
+fn summary_lines(content: &str, width: usize, details: bool) -> Vec<Line> {
+    let title = tr!(
+        "  ◆ Сводка предыдущей части диалога",
+        "  ◆ Summary of the earlier conversation"
+    );
+    if !details {
+        return vec![Line::of(format!("{title} · F2"), Style::brand())];
+    }
+    let mut lines = vec![Line::of(title, Style::brand())];
+    let body = content.split_once("\n\n").map_or(content, |(_, body)| body);
+    for raw in body.lines() {
+        let wrapped = render::wrap(&Line::of(raw, Style::dim()), width.saturating_sub(4));
+        if wrapped.is_empty() {
+            lines.push(Line::new());
+        }
+        for row in wrapped {
+            let mut prefixed = Line::of("    ", Style::plain());
+            prefixed.extend(row);
+            lines.push(prefixed);
+        }
     }
     lines
 }
