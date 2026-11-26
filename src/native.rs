@@ -15,6 +15,7 @@ use std::{
 mod browser;
 mod changes;
 mod desktop;
+mod headless;
 mod mcp;
 mod models;
 mod onboarding;
@@ -587,6 +588,7 @@ pub fn run(
     profile: &mut crate::profile::Profile,
     root: &Path,
     workspace: &mut PathBuf,
+    task: Option<String>,
 ) -> Result<()> {
     crate::platform::require_standard_user()?;
     let path = state_path(profile.work.path());
@@ -598,9 +600,17 @@ pub fn run(
             ..State::default()
         }
     };
+    ensure!(
+        task.is_none() || state.active_provider(DialogMode::Agent).is_some(),
+        "{}",
+        crate::setup_first()
+    );
     #[cfg(windows)]
     tasks::suppress_loader_dialogs();
-    let mut screen = ui::Screen::open()?;
+    let mut screen = match task {
+        Some(task) => ui::Screen::headless(task),
+        None => ui::Screen::open()?,
+    };
     let mut theme = ui::theme::Theme::load(profile.work.path());
     screen.set_theme(theme);
     let mut current_directory = workspace.canonicalize()?;
@@ -638,9 +648,16 @@ pub fn run(
     let mut images = Vec::new();
     let mut resume_turn = false;
     let mut wire = std::collections::BTreeMap::new();
-    let mut temporary = false;
-    let mut history = state.sessions[index].messages.clone();
-    screen.set_dialog_mode(state.sessions[index].mode);
+    // Headless runs behave like /temporary: a fresh Agent chat that is never saved.
+    let mut temporary = screen.is_headless();
+    let mut history = if temporary {
+        Vec::new()
+    } else {
+        state.sessions[index].messages.clone()
+    };
+    if !temporary {
+        screen.set_dialog_mode(state.sessions[index].mode);
+    }
     let mut diagnose = false;
     let mut planning = false;
     let mut proposed_plan = None::<String>;
@@ -2276,7 +2293,7 @@ pub fn run(
             profile.save()?;
         }
     }
-    Ok(())
+    screen.finish_headless()
 }
 fn field<'a>(action: &'a Value, key: &str) -> &'a str {
     action[key].as_str().unwrap_or("")

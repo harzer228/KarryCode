@@ -621,12 +621,57 @@ pub struct Screen {
     permission_mode: super::permissions::Mode,
     dialog_mode: DialogMode,
     approval_card: bool,
+    headless: Option<super::headless::Headless>,
 }
 
 impl Screen {
     pub fn open() -> Result<Self> {
         terminal::enable_raw_mode()?;
-        let screen = Self {
+        let screen = Self::new(None);
+        if let Err(error) = enter() {
+            let _ = terminal::disable_raw_mode();
+            return Err(error.into());
+        }
+        #[cfg(unix)]
+        let screen = {
+            use crossterm::event::{
+                KeyboardEnhancementFlags as Flags, PushKeyboardEnhancementFlags,
+            };
+            let mut screen = screen;
+            screen.enhanced_keys = terminal::supports_keyboard_enhancement().unwrap_or(false)
+                && execute!(
+                    io::stdout(),
+                    PushKeyboardEnhancementFlags(
+                        Flags::DISAMBIGUATE_ESCAPE_CODES
+                            | Flags::REPORT_EVENT_TYPES
+                            | Flags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    )
+                )
+                .is_ok();
+            screen
+        };
+        Ok(screen)
+    }
+
+    /// A screen that never touches the terminal; see `super::headless`.
+    pub(super) fn headless(task: String) -> Self {
+        Self::new(Some(super::headless::Headless::new(task)))
+    }
+
+    pub(super) fn is_headless(&self) -> bool {
+        self.headless.is_some()
+    }
+
+    /// Prints the final reply of a headless run, or returns why it failed.
+    pub(super) fn finish_headless(&mut self) -> Result<()> {
+        match &mut self.headless {
+            Some(headless) => headless.finish(),
+            None => Ok(()),
+        }
+    }
+
+    fn new(headless: Option<super::headless::Headless>) -> Self {
+        Self {
             editor: Editor::new(),
             pastes: Vec::new(),
             submitted_pastes: Vec::new(),
@@ -665,30 +710,8 @@ impl Screen {
             permission_mode: Default::default(),
             dialog_mode: DialogMode::Agent,
             approval_card: false,
-        };
-        if let Err(error) = enter() {
-            let _ = terminal::disable_raw_mode();
-            return Err(error.into());
+            headless,
         }
-        #[cfg(unix)]
-        let screen = {
-            use crossterm::event::{
-                KeyboardEnhancementFlags as Flags, PushKeyboardEnhancementFlags,
-            };
-            let mut screen = screen;
-            screen.enhanced_keys = terminal::supports_keyboard_enhancement().unwrap_or(false)
-                && execute!(
-                    io::stdout(),
-                    PushKeyboardEnhancementFlags(
-                        Flags::DISAMBIGUATE_ESCAPE_CODES
-                            | Flags::REPORT_EVENT_TYPES
-                            | Flags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
-                    )
-                )
-                .is_ok();
-            screen
-        };
-        Ok(screen)
     }
 
     pub(super) fn pick_directory(
@@ -747,6 +770,9 @@ impl Screen {
     }
 
     pub fn report(&mut self, title: &str, body: &str) -> Result<()> {
+        if self.headless.is_some() {
+            return Ok(());
+        }
         let (terminal_width, _) = terminal::size()?;
         let width = (usize::from(terminal_width).saturating_sub(8).clamp(36, 96)).saturating_sub(4);
         let mut lines = Vec::new();
@@ -787,6 +813,9 @@ impl Screen {
         self.background.clear();
     }
     pub fn notice(&mut self, text: &str) {
+        if let Some(headless) = &mut self.headless {
+            headless.notice(text);
+        }
         self.notice = Notice::Text(render::sanitize(text));
     }
 
@@ -818,6 +847,9 @@ impl Screen {
         directory: &Path,
         diagnose: bool,
     ) -> Result<Option<String>> {
+        if let Some(headless) = &mut self.headless {
+            return Ok(headless.input(history));
+        }
         self.diagnose = diagnose;
         if std::mem::take(&mut self.submit_queued) {
             let line = std::mem::take(&mut self.queued);
@@ -1044,6 +1076,11 @@ impl Screen {
         directory: &Path,
     ) -> Result<StreamControl> {
         self.track(output, reasoning);
+        if let Some(headless) = &mut self.headless {
+            headless.progress(history);
+            std::thread::sleep(Duration::from_millis(40));
+            return Ok(StreamControl::Continue);
+        }
         self.tick = self.tick.wrapping_add(1);
         self.draw(history, Some((output, reasoning)), model, directory)?;
         if event::poll(Duration::from_millis(40))? {
@@ -1373,6 +1410,9 @@ impl Screen {
         model: &str,
         directory: &Path,
     ) -> Result<()> {
+        if self.headless.is_some() {
+            return Ok(());
+        }
         let (terminal_width, terminal_height) = terminal::size()?;
         let width = usize::from(terminal_width);
         let height = usize::from(terminal_height);
@@ -1968,6 +2008,9 @@ impl Screen {
     }
 
     fn overlay(&mut self, title: &str, body: Vec<Line>) -> Result<()> {
+        if self.headless.is_some() {
+            return Ok(());
+        }
         let mut scroll = 0usize;
         loop {
             let panel = self.draw_panel(
@@ -2029,6 +2072,15 @@ impl Screen {
         scroll: usize,
         cursor: Option<(usize, usize)>,
     ) -> Result<Panel> {
+        // Panels wait for keys; reaching one headless means a prompt was missed.
+        anyhow::ensure!(
+            self.headless.is_none(),
+            "{}",
+            tr!(
+                "Это действие требует интерактивного терминала.",
+                "This action needs an interactive terminal."
+            )
+        );
         let (terminal_width, terminal_height) = terminal::size()?;
         let width = usize::from(terminal_width);
         let height = usize::from(terminal_height);
@@ -2144,6 +2196,10 @@ impl Screen {
     /// declines; the body is wrapped and capped so it can never push the hints
     /// off screen.
     pub fn confirm(&mut self, title: &str, body: &str) -> Result<bool> {
+        if let Some(headless) = &self.headless {
+            headless.declined(title);
+            return Ok(false);
+        }
         let (terminal_width, _) = terminal::size()?;
         let width = (usize::from(terminal_width).saturating_sub(8).clamp(36, 96)).saturating_sub(4);
         let mut lines = Vec::new();
@@ -2195,6 +2251,9 @@ impl Screen {
 impl Screen {
     /// A transient panel for a bounded provider or MCP request.
     pub fn busy(&mut self, text: &str) -> Result<()> {
+        if self.headless.is_some() {
+            return Ok(());
+        }
         self.draw_panel(text, "", &[Line::new()], 0, None)?;
         Ok(())
     }
@@ -2215,6 +2274,10 @@ impl Screen {
     }
 
     pub fn ask_text(&mut self, title: &str, secret: bool) -> Result<Option<String>> {
+        if let Some(headless) = &self.headless {
+            headless.declined(title);
+            return Ok(None);
+        }
         let mut input = String::new();
         loop {
             let mut line = Line::new();
@@ -2264,6 +2327,10 @@ impl Screen {
     }
 
     pub fn choose(&mut self, title: &str, options: &[String]) -> Result<Option<usize>> {
+        if let Some(headless) = &self.headless {
+            headless.declined(title);
+            return Ok(None);
+        }
         if options.is_empty() {
             return Ok(None);
         }
@@ -2318,6 +2385,10 @@ impl Screen {
         model: &str,
         directory: &Path,
     ) -> Result<()> {
+        if let Some(headless) = &mut self.headless {
+            headless.progress(history);
+            return Ok(());
+        }
         self.draw(history, None, model, directory)
     }
 
@@ -2386,6 +2457,10 @@ impl Screen {
     }
 
     fn poll_tool_stop(&mut self, message: &str) -> Result<bool> {
+        if self.headless.is_some() {
+            std::thread::sleep(Duration::from_millis(55));
+            return Ok(false);
+        }
         if !event::poll(Duration::from_millis(55))? {
             return Ok(false);
         }
@@ -2593,6 +2668,10 @@ impl Screen {
     }
 
     fn review_card(&mut self, title: &str, text: &str, permissions_shortcut: bool) -> Result<bool> {
+        if let Some(headless) = &self.headless {
+            headless.declined(title);
+            return Ok(false);
+        }
         let (terminal_width, _) = terminal::size()?;
         let width = (usize::from(terminal_width).saturating_sub(8).clamp(36, 96)).saturating_sub(4);
         let mut lines = Vec::new();
@@ -3138,6 +3217,9 @@ impl Drop for Screen {
 
 impl Screen {
     fn leave(&mut self) -> io::Result<()> {
+        if self.headless.is_some() {
+            return Ok(());
+        }
         #[cfg(unix)]
         if self.enhanced_keys {
             let _ = execute!(io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
@@ -3631,6 +3713,7 @@ mod tests {
             permission_mode: crate::native::permissions::Mode::Ask,
             dialog_mode: crate::native::permissions::DialogMode::Agent,
             approval_card: false,
+            headless: None,
         }
     }
 
