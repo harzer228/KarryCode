@@ -8,18 +8,22 @@ pub(super) use request::{
     apply_reasoning, attach_image, available_output, constrain_request, input_estimate,
     prepare_work_request,
 };
-pub(super) use stream::{Delta, InterruptedStream};
+pub(super) use stream::{Delta, InterruptedStream, Reply};
 #[cfg(test)]
 pub(super) use {
     request::prepare_request,
-    stream::{Reply, ToolCall, Usage, decode_stream_mode},
+    stream::{ToolCall, Usage, decode_stream_mode},
 };
 
 #[cfg(test)]
 pub(super) mod tests {
     use super::super::*;
     use super::{http::*, request::*, stream::*};
-    use std::io::BufReader;
+    use serde_json::{Value, json};
+    use std::{
+        io::{BufReader, Read},
+        sync::{atomic::AtomicBool, mpsc},
+    };
     pub(in crate::native) fn provider(name: &str, key: &str, context: u32) -> Provider {
         Provider {
             connection: Connection {
