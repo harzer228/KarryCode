@@ -861,7 +861,16 @@ impl Screen {
     }
 
     pub fn help(&mut self) -> Result<()> {
-        self.overlay(tr!("Команды и клавиши", "Commands and keys"), help_lines())
+        let lines = if self.recovery {
+            commands()
+                .into_iter()
+                .filter(|(name, _)| super::agent::recovery_allows(name))
+                .map(|(name, description)| Line::from(format!("{name:<12} {description}")))
+                .collect()
+        } else {
+            help_lines()
+        };
+        self.overlay(tr!("Команды и клавиши", "Commands and keys"), lines)
     }
 
     pub fn input(
@@ -1340,7 +1349,9 @@ impl Screen {
             return Vec::new();
         }
         let prefix = self.editor.completion_prefix();
-        if let Some(query) = super::attachment_prefix(prefix.rsplit('\n').next().unwrap_or("")) {
+        if !self.recovery
+            && let Some(query) = super::attachment_prefix(prefix.rsplit('\n').next().unwrap_or(""))
+        {
             return super::attachment_choices(directory, query);
         }
         if self.editor.buffer.contains(&'\n') {
@@ -1348,6 +1359,7 @@ impl Screen {
         }
         menu_items(&prefix, false, false)
             .into_iter()
+            .filter(|(name, _)| !self.recovery || super::agent::recovery_allows(name))
             .map(|(name, description)| (name.to_owned(), description))
             .collect()
     }
