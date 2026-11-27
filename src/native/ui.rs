@@ -1144,7 +1144,7 @@ impl Screen {
                             }
                             self.selected = 0;
                         }
-                        KeyCode::Enter if super::slash_command(&self.editor.text()) => {
+                        KeyCode::Enter if super::commands::slash_command(&self.editor.text()) => {
                             let command = self.editor.text().trim().to_owned();
                             self.editor.clear();
                             return Ok(StreamControl::Command(command));
@@ -1203,7 +1203,7 @@ impl Screen {
 
     fn submit(&mut self, line: &str) -> String {
         let line = line.to_owned();
-        if !super::slash_command(&line) {
+        if !super::commands::slash_command(&line) {
             self.submitted_pastes = std::mem::take(&mut self.pastes);
         }
         if self.submitted.last() != Some(&line) {
@@ -1323,8 +1323,10 @@ impl Screen {
             return Vec::new();
         }
         let prefix = self.editor.completion_prefix();
-        if let Some(query) = super::attachment_prefix(prefix.rsplit('\n').next().unwrap_or("")) {
-            return super::attachment_choices(directory, query);
+        if let Some(query) =
+            super::files::attachment_prefix(prefix.rsplit('\n').next().unwrap_or(""))
+        {
+            return super::files::attachment_choices(directory, query);
         }
         if self.editor.buffer.contains(&'\n') {
             return Vec::new();
@@ -1338,7 +1340,8 @@ impl Screen {
     fn complete(&mut self, item: &str) -> Option<String> {
         let prefix = self.editor.completion_prefix();
         if item.starts_with('@') {
-            if let Some(query) = super::attachment_prefix(prefix.rsplit('\n').next().unwrap_or(""))
+            if let Some(query) =
+                super::files::attachment_prefix(prefix.rsplit('\n').next().unwrap_or(""))
             {
                 self.editor.replace_tail(query.chars().count() + 1, item);
                 self.menu_closed = !item.ends_with('/');
@@ -1465,7 +1468,7 @@ impl Screen {
 
         let streaming = pending.is_some();
         let notice = if self.notice.is_empty() && !self.pastes.is_empty() {
-            super::paste_label(
+            super::files::paste_label(
                 self.pastes
                     .iter()
                     .map(|text| text.lines().count().max(1))
@@ -1933,7 +1936,7 @@ impl Screen {
         let available = self.input_estimate.map_or("—".into(), |used| {
             format!(
                 "~{}",
-                super::available_output(
+                super::provider::available_output(
                     self.context_limit,
                     self.input_limit,
                     self.output_limit,
@@ -3913,7 +3916,7 @@ mod tests {
         editor.left();
         editor.insert(['\n']);
         assert_eq!(editor.text(), "/theme\n界");
-        assert!(!super::super::slash_command(&editor.text()));
+        assert!(!super::super::commands::slash_command(&editor.text()));
         assert_eq!(
             editor.composer(8, 2),
             (vec!["/theme".into(), "界".into()], 1, 0)

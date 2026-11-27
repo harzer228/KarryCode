@@ -1,4 +1,4 @@
-use super::{Provider, RequestMode, permissions};
+use super::{Provider, permissions, provider::RequestMode};
 use serde_json::{Map, Value, json};
 
 /// Name of the single tool used before per-action tools; it carries `action` in its arguments.

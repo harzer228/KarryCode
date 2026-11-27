@@ -204,7 +204,7 @@ impl Hub {
         server: &str,
         tool: &str,
         arguments: &Value,
-    ) -> Result<(String, Option<super::Visual>)> {
+    ) -> Result<(String, Option<super::provider::Visual>)> {
         let running = self.running.get_mut(server).with_context(|| {
             trf!(
                 "MCP-сервер {} не запущен",
@@ -1180,7 +1180,7 @@ impl Client {
         &mut self,
         name: &str,
         arguments: &Value,
-    ) -> Result<(String, Option<super::Visual>)> {
+    ) -> Result<(String, Option<super::provider::Visual>)> {
         let result = self.request(
             "tools/call",
             json!({"name": name, "arguments": arguments}),
@@ -1217,7 +1217,7 @@ impl Client {
                             .decode(data)
                             .is_ok()
                     })
-                .then(|| super::Visual {
+                .then(|| super::provider::Visual {
                     mime: mime.into(),
                     data: data.into(),
                 })

@@ -1,6 +1,10 @@
 use super::{
-    InputLimitExceeded, Message, OutputSpaceExceeded, Provider, RequestPlan, WireCalls,
-    apply_reasoning, chat_error, constrain_request, parse_action, ui,
+    Message, Provider, chat_error, parse_action,
+    provider::{
+        InputLimitExceeded, OutputSpaceExceeded, RequestPlan, WireCalls, apply_reasoning,
+        constrain_request,
+    },
+    ui,
 };
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
@@ -423,7 +427,7 @@ pub(super) fn run(
         let worker = scope.spawn(move || {
             summarize(provider, entries, |plan| {
                 let (sender, _) = mpsc::channel();
-                super::request(provider, plan, cancel, sender).map(|reply| reply.content)
+                super::provider::request(provider, plan, cancel, sender).map(|reply| reply.content)
             })
         });
         screen.wait_for_tool(label, cancel, worker)
@@ -480,8 +484,9 @@ pub(super) fn run(
 #[cfg(test)]
 mod tests {
     use super::super::{
-        DialogMode, Reply, Session, State, ToolCall, Usage, decode_stream_mode, models,
-        prepare_request, provider_tests::provider, save, state_path,
+        DialogMode, Session, State, models,
+        provider::{Reply, ToolCall, Usage, decode_stream_mode, prepare_request, tests::provider},
+        save, state_path,
     };
     use super::*;
     use crate::native::models::Protocol;
