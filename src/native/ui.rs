@@ -865,7 +865,9 @@ impl Screen {
             commands()
                 .into_iter()
                 .filter(|(name, _)| super::agent::recovery_allows(name))
-                .map(|(name, description)| Line::from(format!("{name:<12} {description}")))
+                .map(|(name, description)| {
+                    Line::of(format!("{name:<12} {description}"), Style::fg(render::FG))
+                })
                 .collect()
         } else {
             help_lines()
