@@ -41,9 +41,19 @@ pub struct Profile {
 
 impl Profile {
     pub fn open(root: &Path, interactive: bool) -> Result<Self> {
+        Self::open_inner(root, interactive, false)
+    }
+
+    pub fn open_existing(root: &Path) -> Result<Self> {
+        Self::open_inner(root, true, true)
+    }
+
+    fn open_inner(root: &Path, interactive: bool, existing_only: bool) -> Result<Self> {
         let marker = crate::identity::read_marker(root)?;
         let folder = root.join("profile");
-        fs::create_dir_all(&folder)?;
+        if !existing_only {
+            fs::create_dir_all(&folder)?;
+        }
         ensure!(
             !crate::safe_files::is_link(&fs::symlink_metadata(&folder)?),
             "{}",
@@ -68,6 +78,14 @@ impl Profile {
             fingerprint(&slot_path(&folder, 1))?,
         ];
         let fresh = observed.iter().all(Option::is_none);
+        ensure!(
+            !existing_only || !fresh,
+            "{}",
+            tr!(
+                "Сохранённый снимок профиля не найден.",
+                "No saved profile snapshot was found."
+            )
+        );
         ensure!(interactive || !fresh, "{}", crate::setup_first());
         let secret = crate::vault::unlock(&folder, &marker.id, fresh)?;
         let mut work = crate::platform::private_dir()?;

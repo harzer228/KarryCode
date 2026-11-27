@@ -11,6 +11,8 @@ Options:
                       read the task from stdin. Prompts that need approval are
                       declined.
   --safe-ui           Start with built-in console appearance and language.
+  --safe              Open a temporary recovery chat with the saved default model.
+                      Skip TOML overrides, tools, extensions and MCP startup.
   -h, --help          Show this help.
   -V, --version       Show the version.";
 
@@ -28,6 +30,7 @@ pub enum Command {
         folder: Option<PathBuf>,
         print: Option<Task>,
         safe_ui: bool,
+        safe: bool,
     },
 }
 
@@ -43,10 +46,12 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
     let mut folder = None;
     let mut print = None;
     let mut safe_ui = false;
+    let mut safe = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
             Some("--safe-ui") => safe_ui = true,
+            Some("--safe") => safe = true,
             Some("-p" | "--print") => {
                 ensure!(
                     print.is_none(),
@@ -76,10 +81,15 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
             }
         }
     }
+    ensure!(
+        !safe || print.is_none(),
+        "--safe requires an interactive terminal"
+    );
     Ok(Command::Run {
         folder,
         print,
         safe_ui,
+        safe,
     })
 }
 
@@ -128,6 +138,7 @@ mod tests {
             folder: Some("project".into()),
             print: Some(Task::Text("fix the tests".into())),
             safe_ui: false,
+            safe: false,
         };
         assert_eq!(run(&["project", "-p", "fix the tests"]).unwrap(), expected);
         assert_eq!(run(&["-p", "fix the tests", "project"]).unwrap(), expected);
@@ -141,6 +152,7 @@ mod tests {
                 folder: None,
                 print: None,
                 safe_ui: false,
+                safe: false,
             }
         );
         assert_eq!(
@@ -149,6 +161,7 @@ mod tests {
                 folder: Some("project".into()),
                 print: None,
                 safe_ui: false,
+                safe: false,
             }
         );
     }
@@ -161,6 +174,7 @@ mod tests {
                 folder: None,
                 print: Some(Task::Stdin),
                 safe_ui: false,
+                safe: false,
             }
         );
         assert_eq!(
@@ -169,6 +183,7 @@ mod tests {
                 folder: None,
                 print: Some(Task::Text("--explain".into())),
                 safe_ui: false,
+                safe: false,
             }
         );
     }
@@ -181,12 +196,14 @@ mod tests {
                 folder: Some("folder".into()),
                 print: None,
                 safe_ui: true,
+                safe: false,
             }
         );
     }
 
     #[test]
     fn bad_combinations_are_rejected() {
+        assert!(run(&["--safe", "-p", "task"]).is_err());
         assert!(run(&["-p"]).is_err());
         assert!(run(&["project", "--print"]).is_err());
         assert!(run(&["-p", "one", "-p", "two"]).is_err());
@@ -195,6 +212,19 @@ mod tests {
         assert!(run(&["--unknown"]).is_err());
         assert!(run(&["-p", "task", "--help"]).is_err());
         assert!(run(&["-p", "task", "--version"]).is_err());
+    }
+
+    #[test]
+    fn recovery_accepts_an_explicit_project_folder() {
+        assert_eq!(
+            run(&["--safe", "folder"]).unwrap(),
+            Command::Run {
+                folder: Some("folder".into()),
+                print: None,
+                safe_ui: false,
+                safe: true,
+            }
+        );
     }
 
     #[test]

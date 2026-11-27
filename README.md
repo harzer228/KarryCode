@@ -41,14 +41,14 @@ curl -fsSL https://raw.githubusercontent.com/harzer228/KarryCode/main/install.sh
 **Cargo** (build from a GitHub release tag with Rust 1.100.0)
 
 ```sh
-cargo install --git https://github.com/harzer228/KarryCode --tag v1.2-beta --locked
+cargo install --git https://github.com/harzer228/KarryCode --tag v1.3-beta --locked
 ```
 
 The scripts verify the downloaded file against the release's SHA-256 manifest. Repeat the install command to update. Windows adds `karrycode` to your user PATH. On Linux, add `~/.local/bin` to your PATH if you want to use the shorter command. [Binaries and checksums](https://github.com/harzer228/KarryCode/releases/latest)
 
 ## Development build
 
-The `main` branch adds `--print`, `/compact`, and individually named model tools after the `v1.2-beta` tag. From a checkout of `main`, build with `cargo build --locked`. The executable is under `target/debug/`. [Changes on main](CHANGELOG.md#unreleased)
+From a checkout of `main`, build with `cargo build --locked`. The executable is under `target/debug/`. [Changes in 1.3-beta](CHANGELOG.md#13-beta)
 
 ## Start a project
 
@@ -70,7 +70,9 @@ The `main` branch adds `--print`, `/compact`, and individually named model tools
 
 ### Context and model tools
 
-On `main`, `/compact` asks the active model to summarize older messages. KarryCode can also attempt compaction automatically at about 85% of the estimated input limit or when a request already exceeds its budget. It replaces the older portion of the chat with a summary and keeps recent messages, preserving complete tool-call rounds. A saved chat then stores the compacted history.
+If interactive startup fails, KarryCode retries once in recovery mode when it can open the profile. You can also run `karrycode --safe` directly. It opens a temporary Chat only session with the saved default model and built-in UI. It skips TOML overrides, project instructions, extensions and MCP startup. The recovery session leaves saved chat history and snapshots untouched. If the profile cannot be unlocked or the terminal cannot draw the UI, a plain console displays the error and the profile path.
+
+`/compact` asks the active model to summarize older messages. KarryCode can also attempt compaction automatically at about 85% of the estimated input limit or when a request already exceeds its budget. It replaces the older portion of the chat with a summary and keeps recent messages, preserving complete tool-call rounds. A saved chat then stores the compacted history.
 
 The work plan stores a goal, constraints, acceptance criteria and step status separately from the conversation. It survives `/compact` and `/sessions`. `/cd` marks project steps for another check. `read_many` reads several files or ranges, `apply_patch` reviews a batch of unified diffs under the usual permission rules, and `read_tool_result` pages through a recent large result.
 
@@ -111,7 +113,7 @@ Open `/creator` and describe a tool, skill, theme or panel. KarryCode can prepar
 
 ## Scripts and CI
 
-In a build from `main`, use `-p` or `--print` to run one task in a fresh temporary chat. Pass `-` as the task to read it from stdin.
+Use `-p` or `--print` to run one task in a fresh temporary chat. Pass `-` as the task to read it from stdin.
 
 ```sh
 karrycode path/to/project -p "Add a test for the date parser"

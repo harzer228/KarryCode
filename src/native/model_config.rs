@@ -508,7 +508,11 @@ fn ready(state: &State, provider: Provider) -> Result<Provider> {
     Ok(provider)
 }
 
-fn effective(state: &State, choice: Option<&Choice>, mode: DialogMode) -> Result<Option<Provider>> {
+pub(super) fn effective(
+    state: &State,
+    choice: Option<&Choice>,
+    mode: DialogMode,
+) -> Result<Option<Provider>> {
     if let Some(choice) = choice {
         let saved = &state.models[index_of(state, choice)?];
         let route = state

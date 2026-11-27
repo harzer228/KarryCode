@@ -73,7 +73,7 @@ fn run() -> Result<()> {
     {
         return native::extensions::worker();
     }
-    let (folder, print, safe_ui) = match cli::parse(env::args_os().skip(1))? {
+    let (folder, print, mode) = match cli::parse(env::args_os().skip(1))? {
         cli::Command::Help => {
             println!(
                 "KarryCode CLI {}\nAI coding in your terminal.\n\n{}",
@@ -90,9 +90,53 @@ fn run() -> Result<()> {
             folder,
             print,
             safe_ui,
-        } => (folder, print, safe_ui),
+            safe,
+        } => {
+            let mode = if safe {
+                native::Launch::Recovery
+            } else if safe_ui {
+                native::Launch::BuiltinUi
+            } else {
+                native::Launch::Normal
+            };
+            (folder, print, mode)
+        }
     };
-    let root = platform::app_dir()?;
+    let interactive = print.is_none() && io::stdin().is_terminal() && io::stdout().is_terminal();
+    let result = launch(folder, print, mode, interactive);
+    if interactive && let Err(error) = &result {
+        if error.is::<native::StartupError>() || mode.recovery() {
+            eprintln!("KarryCode CLI: {error:#}");
+            if let Ok(root) = platform::app_dir() {
+                eprintln!(
+                    "{}",
+                    trf!("Папка профиля · {}", "Profile folder · {}", root.display())
+                );
+            }
+            let _ = prompt(tr!(
+                "Аварийная консоль. Проверь путь к проекту и доступ к профилю. Enter — закрыть. ",
+                "Recovery console. Check the project path and access to the profile. Press Enter to close. "
+            ));
+            return Ok(());
+        }
+        eprintln!(
+            "{}",
+            tr!(
+                "Для следующего запуска используй karrycode --safe.",
+                "Use karrycode --safe for the next launch."
+            )
+        );
+    }
+    result
+}
+
+fn launch(
+    folder: Option<std::path::PathBuf>,
+    print: Option<cli::Task>,
+    mode: native::Launch,
+    interactive: bool,
+) -> Result<()> {
+    let root = platform::app_dir().map_err(native::StartupError)?;
     language::load(&root);
     platform::require_standard_user()?;
     let task = match print {
@@ -116,7 +160,56 @@ fn run() -> Result<()> {
             None
         }
     };
-    let mut workspace = match folder {
+    let (root, mut workspace) =
+        open_paths(root, folder, task.is_some(), mode).map_err(native::StartupError)?;
+    let mut profile = if mode.recovery() {
+        profile::Profile::open_existing(&root)
+    } else {
+        profile::Profile::open(&root, task.is_none())
+    }
+    .map_err(native::StartupError)?;
+    if task.is_none() && !mode.recovery() {
+        profile.recent.remember(&root, &workspace);
+    }
+    let mut session = native::run(&mut profile, &root, &mut workspace, task, mode);
+    let mut recovered = mode.recovery();
+    if interactive
+        && !recovered
+        && let Err(error) = &session
+        && error.is::<native::StartupError>()
+    {
+        eprintln!(
+            "{}",
+            trf!(
+                "Ошибка запуска · {error:#}\nОткрываю безопасный режим.",
+                "Startup error · {error:#}\nOpening recovery mode."
+            )
+        );
+        recovered = true;
+        session = native::run(
+            &mut profile,
+            &root,
+            &mut workspace,
+            None,
+            native::Launch::Recovery,
+        );
+    }
+    let saved = if session.is_ok() && !recovered {
+        profile.save()
+    } else {
+        Ok(())
+    };
+    let closed = profile.close();
+    session.and(saved).and(closed)
+}
+
+fn open_paths(
+    root: std::path::PathBuf,
+    folder: Option<std::path::PathBuf>,
+    headless: bool,
+    mode: native::Launch,
+) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let workspace = match folder {
         Some(folder) => folder,
         None => env::current_dir()?,
     }
@@ -129,7 +222,17 @@ fn run() -> Result<()> {
         workspace.is_dir(),
         tr!("Укажи папку проекта.", "Specify a project folder.")
     );
-    fs::create_dir_all(&root)?;
+    if mode.recovery() {
+        ensure!(
+            root.join("profile-id.json").is_file(),
+            tr!(
+                "Сохранённый профиль не найден.",
+                "No saved profile was found."
+            )
+        );
+    } else {
+        fs::create_dir_all(&root)?;
+    }
     ensure!(
         !safe_files::is_link(&fs::symlink_metadata(&root)?),
         tr!(
@@ -147,26 +250,18 @@ fn run() -> Result<()> {
         )
     );
     ensure!(
-        task.is_none() || root.join("profile-id.json").exists(),
+        !headless || root.join("profile-id.json").exists(),
         "{}",
         setup_first()
     );
-    if !root.join("profile-id.json").exists()
+    if !mode.recovery()
+        && !root.join("profile-id.json").exists()
         && let Err(error) = identity::init(&root)
         && !root.join("profile-id.json").exists()
     {
         return Err(error);
     }
-    let mut profile = profile::Profile::open(&root, task.is_none())?;
-    if task.is_none() {
-        profile.recent.remember(&root, &workspace);
-    }
-    let session = native::run(&mut profile, &root, &mut workspace, task, safe_ui);
-    let saved = profile.save();
-    let closed = profile.close();
-    saved?;
-    closed?;
-    session
+    Ok((root, workspace))
 }
 
 pub(crate) fn setup_first() -> &'static str {

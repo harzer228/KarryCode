@@ -303,7 +303,7 @@ mod tests {
             bundle.path(),
             &mut workspace,
             Some("Create hello.txt".into()),
-            false,
+            super::super::Launch::Normal,
         )?;
         let bodies = server.join().unwrap()?;
         assert_eq!(bodies.len(), 3);

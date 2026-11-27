@@ -3,7 +3,7 @@ use anyhow::{Result, ensure};
 use std::{fs, path::Path, process::Command};
 
 pub fn inspect(root: &Path) -> Result<String> {
-    let mut lines = vec![super::list_files(root, ".")?];
+    let mut lines = vec![super::files::list_files(root, ".")?];
     lines.push(format!(
         "Available tasks: {}",
         super::tasks::available(root).join(", ")
@@ -15,11 +15,11 @@ pub fn inspect(root: &Path) -> Result<String> {
         ("main.py", "Python"),
         ("index.html", "Web"),
     ] {
-        if super::safe_path(root, file).is_ok_and(|path| path.is_file()) {
+        if super::files::safe_path(root, file).is_ok_and(|path| path.is_file()) {
             lines.push(format!("{stack}: {file}"));
         }
     }
-    if let Ok(content) = super::read_file(root, "AGENTS.md") {
+    if let Ok(content) = super::files::read_file(root, "AGENTS.md") {
         lines.push(format!("Project instructions (AGENTS.md):\n{content}"));
     }
     Ok(lines.join("\n"))
@@ -58,7 +58,7 @@ pub fn search(
         "Expected a pattern up to 256 bytes"
     );
     let folder = if folder.is_empty() { "." } else { folder };
-    let directory = super::safe_path(root, folder)?;
+    let directory = super::files::safe_path(root, folder)?;
     let expression = regex
         .then(|| {
             regex::RegexBuilder::new(pattern)
@@ -73,7 +73,7 @@ pub fn search(
     };
     let mut output = Vec::new();
     if filter.is_some() && directory.is_file() {
-        let content = super::read_file(root, folder)?;
+        let content = super::files::read_file(root, folder)?;
         match_lines(
             &mut output,
             &folder.replace('\\', "/"),
@@ -127,7 +127,7 @@ pub fn search(
                 if !matching(glob) {
                     continue;
                 }
-                if let Ok(content) = super::read_file(&root, &rel) {
+                if let Ok(content) = super::files::read_file(&root, &rel) {
                     match_lines(&mut output, &portable, &content, &line_matches);
                 }
             } else if matching(pattern) {

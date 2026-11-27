@@ -2,7 +2,7 @@
 
 KarryCode runs as a regular user. Review action prompts before sharing desktop content or changing files. On Windows, DPAPI ties the local profile key to your account. Keep the encrypted profile and the key needed to unlock it together when backing up a Windows installation.
 
-In builds from `main`, `--print` uses Auto approval rules. Actions that need a prompt are declined, while sandboxed commands and reversible project edits may run under the usual rules. Configured user MCP servers can start during initialization. Project MCP entries still require explicit approval.
+`--print` uses Auto approval rules. Actions that need a prompt are declined, while sandboxed commands and reversible project edits may run under the usual rules. Configured user MCP servers can start during initialization. Project MCP entries still require explicit approval.
 
 Context compaction sends older conversation excerpts and shortened tool results to the active model provider. A saved chat stores the resulting summary and retained messages in its encrypted profile.
 

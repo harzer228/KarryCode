@@ -640,6 +640,7 @@ pub struct Screen {
     selection: Option<Selection>,
     permission_mode: super::permissions::Mode,
     dialog_mode: DialogMode,
+    recovery: bool,
     approval_card: bool,
     headless: Option<super::headless::Headless>,
 }
@@ -731,6 +732,7 @@ impl Screen {
             selection: None,
             permission_mode: Default::default(),
             dialog_mode: DialogMode::Agent,
+            recovery: false,
             approval_card: false,
             headless,
         }
@@ -2584,14 +2586,32 @@ impl Screen {
     }
 
     pub(super) fn dialog_mode(&self) -> DialogMode {
-        self.dialog_mode
+        if self.recovery {
+            DialogMode::Chat
+        } else {
+            self.dialog_mode
+        }
     }
 
     pub(super) fn set_dialog_mode(&mut self, mode: DialogMode) {
-        self.dialog_mode = mode;
+        if !self.recovery {
+            self.dialog_mode = mode;
+        }
+    }
+
+    pub(super) fn set_recovery(&mut self) {
+        self.recovery = true;
+        self.dialog_mode = DialogMode::Chat;
     }
 
     pub fn permissions_menu(&mut self) -> Result<()> {
+        if self.recovery {
+            self.localized_notice(
+                "Безопасный запуск работает в режиме «Только чат».",
+                "Recovery mode uses Chat only.",
+            );
+            return Ok(());
+        }
         let was_approval = std::mem::replace(&mut self.approval_card, true);
         let result = self.edit_permissions();
         self.approval_card = was_approval;
@@ -3972,6 +3992,7 @@ mod tests {
             selection: None,
             permission_mode: crate::native::permissions::Mode::Ask,
             dialog_mode: crate::native::permissions::DialogMode::Agent,
+            recovery: false,
             approval_card: false,
             headless: None,
         }

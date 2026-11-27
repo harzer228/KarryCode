@@ -1,13 +1,16 @@
 # Changelog
 
-## Unreleased
+## 1.3-beta
+
+- Retry failed interactive startup in a temporary recovery chat. Use `--safe` manually to skip project config, extensions, MCP and tools.
+- Keep diagnostics available in a plain console when the profile or terminal cannot open.
+- Split the native agent into focused modules for commands, tool actions, files and provider requests.
 
 - Keep a structured work plan through `/compact` and `/sessions`, review it through `/code`, and follow progress in `/tasks`.
 - Add profile and project TOML model configuration in `/config` with encrypted, endpoint-bound credentials and per-chat selection.
 - Add `read_many`, conflict-checked `apply_patch` and paged `read_tool_result`.
 - Create and test local tools and skills with `/creator`. Approve exact revisions, then manage or restore them through `/extensions`.
 - Add appearance packs, interface dictionaries, data-only panels and the `--safe-ui` recovery option.
-
 - Run one task with `-p` or `--print`, including tasks read from stdin. The reply goes to stdout, progress goes to stderr, and the chat remains temporary.
 - Compact older messages with `/compact` or automatically near the model's input limit. Keep recent messages and complete tool rounds.
 - Give each model action its own named tool and argument schema. Continue accepting replies written for the legacy `project` tool.
