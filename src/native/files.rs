@@ -320,11 +320,16 @@ mod tests {
             attachment_prefix("draft @\"Some Folder/n"),
             Some("\"Some Folder/n")
         );
-        assert!(
-            attach_files(root.path(), "Check @\"Some Folder/notes.txt\"", &[])?
-                .0
-                .ends_with("hello")
+        let prompt = "Check @\"Some Folder/notes.txt\"";
+        let (content, display) = attach_files(root.path(), prompt, &[])?;
+        let (_, attachment) = content
+            .split_once("\n\nUntrusted file attachment (JSON):\n")
+            .expect("the attachment must be marked as untrusted");
+        assert_eq!(
+            serde_json::from_str::<Value>(attachment)?,
+            json!({"path": "Some Folder/notes.txt", "content": "hello"})
         );
+        assert_eq!(display.as_deref(), Some(prompt));
         assert!(attach_files(root.path(), "Check @.env", &[]).is_err());
         Ok(())
     }
