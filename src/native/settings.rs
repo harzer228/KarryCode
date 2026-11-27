@@ -5,7 +5,10 @@ use super::{
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -14,6 +17,12 @@ pub(super) struct Settings {
     subagents: u8,
     pub provider_limits: BTreeMap<u32, super::subagents::Limit>,
     connection_limits: BTreeMap<u32, u8>,
+    pub(super) model_aliases: BTreeMap<String, u32>,
+    pub(super) needs_model_key: BTreeSet<u32>,
+    pub(super) approved_model_projects: BTreeMap<String, super::model_config::ProjectApproval>,
+    pub(super) extensions: Vec<super::extensions::Grant>,
+    pub(super) appearance: Option<String>,
+    pub(super) custom_locale: bool,
 }
 
 impl Default for Settings {
@@ -23,6 +32,12 @@ impl Default for Settings {
             subagents: 2,
             provider_limits: BTreeMap::new(),
             connection_limits: BTreeMap::new(),
+            model_aliases: BTreeMap::new(),
+            needs_model_key: BTreeSet::new(),
+            approved_model_projects: BTreeMap::new(),
+            extensions: Vec::new(),
+            appearance: None,
+            custom_locale: true,
         }
     }
 }
@@ -46,6 +61,8 @@ impl Settings {
     pub(super) fn remove_connection(&mut self, connection: u32) {
         self.connection_limits.remove(&connection);
         self.provider_limits.remove(&connection);
+        self.needs_model_key.remove(&connection);
+        self.model_aliases.retain(|_, id| *id != connection);
     }
 
     fn policy_label(&self, connection: u32) -> String {
@@ -106,21 +123,63 @@ impl Settings {
     }
 }
 
+pub(super) struct MenuContext<'a> {
+    pub work: &'a Path,
+    pub root: &'a Path,
+    pub packs: Option<&'a [(String, super::appearance::Appearance)]>,
+    pub connection: Option<u32>,
+}
+
+pub(super) fn appearance_menu(
+    screen: &mut Screen,
+    settings: &mut Settings,
+    theme: &mut Theme,
+    work: &Path,
+    packs: Option<&[(String, super::appearance::Appearance)]>,
+) -> Result<bool> {
+    let choice = match packs {
+        Some(packs) => super::appearance::choose(screen, packs, settings.appearance.as_deref())?,
+        None => Some(None),
+    };
+    match choice {
+        None => Ok(false),
+        Some(Some(id)) => {
+            let pack = packs
+                .unwrap()
+                .iter()
+                .find(|(name, _)| name == &id)
+                .map(|(_, pack)| pack.clone());
+            screen.set_appearance(pack, true)?;
+            settings.appearance = Some(id);
+            settings.custom_locale = true;
+            Ok(true)
+        }
+        Some(None) => {
+            let Some(selected) = screen.choose_theme(*theme)? else {
+                return Ok(false);
+            };
+            selected.save(work)?;
+            *theme = selected;
+            settings.appearance = None;
+            screen.set_appearance(None, false)?;
+            screen.set_theme(selected);
+            Ok(true)
+        }
+    }
+}
+
 pub(super) fn menu(
     screen: &mut Screen,
     state: &mut State,
     theme: &mut Theme,
-    work: &Path,
-    root: &Path,
+    context: MenuContext<'_>,
     desktop_paused: bool,
     mut redraw_language: impl FnMut(&mut Screen, &State) -> Result<()>,
 ) -> Result<bool> {
     let mut changed = false;
     let mut resume_desktop = false;
     loop {
-        let connection = state
-            .active_provider(super::DialogMode::Agent)
-            .map(|provider| provider.connection.id);
+        let connection = context.connection;
         let parallel = match connection {
             Some(id) => {
                 let policy = state.settings.policy_label(id);
@@ -147,7 +206,11 @@ pub(super) fn menu(
         };
         let options = [
             trf!("Язык · {}", "Language · {}", tr!("Русский", "English")),
-            tr!("Тема агента", "Agent theme").into(),
+            tr!(
+                "Оформление и расширения языка",
+                "Appearance and language packs"
+            )
+            .into(),
             trf!("Рабочий стол · {desktop}", "Desktop control · {desktop}"),
             trf!(
                 "Саб-агенты · {} одновременно",
@@ -158,24 +221,43 @@ pub(super) fn menu(
         ];
         match screen.choose(tr!("Настройки агента", "Agent settings"), &options)? {
             Some(0) => {
-                if let Some(choice) = screen.choose(
-                    tr!("Язык интерфейса", "Interface language"),
-                    &["Русский".into(), "English".into()],
-                )? && crate::language::english() != (choice == 1)
+                let mut choices = vec!["Русский".into(), "English".into()];
+                let selected = context
+                    .packs
+                    .and_then(|packs| {
+                        packs
+                            .iter()
+                            .find(|(id, _)| Some(id) == state.settings.appearance.as_ref())
+                    })
+                    .map(|(_, pack)| pack);
+                if selected.is_some_and(super::appearance::Appearance::has_locale) {
+                    choices.push(tr!("Язык пакета", "Pack language").into());
+                }
+                if let Some(choice) =
+                    screen.choose(tr!("Язык интерфейса", "Interface language"), &choices)?
                 {
-                    crate::language::save(
-                        root,
-                        [crate::language::Language::Ru, crate::language::Language::En][choice],
-                    )?;
+                    if choice < 2 {
+                        crate::language::save(
+                            context.root,
+                            [crate::language::Language::Ru, crate::language::Language::En][choice],
+                        )?;
+                    }
+                    state.settings.custom_locale = choice == 2;
+                    screen.set_appearance(selected.cloned(), state.settings.custom_locale)?;
+                    changed = true;
                     redraw_language(screen, state)?;
                 }
             }
             Some(1) => {
-                if let Some(next) = screen.choose_theme(*theme)? {
-                    next.save(work)?;
-                    *theme = next;
-                    screen.set_theme(next);
+                if appearance_menu(
+                    screen,
+                    &mut state.settings,
+                    theme,
+                    context.work,
+                    context.packs,
+                )? {
                     changed = true;
+                    redraw_language(screen, state)?;
                 }
             }
             Some(2) if cfg!(windows) => {
@@ -232,7 +314,7 @@ pub(super) fn menu(
             Some(_) => {}
             None => {
                 if changed {
-                    super::save(work, state)?;
+                    super::save(context.work, state)?;
                 }
                 return Ok(resume_desktop);
             }

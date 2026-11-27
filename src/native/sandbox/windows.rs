@@ -7,9 +7,10 @@ use std::{
     os::windows::{
         ffi::OsStrExt,
         io::{AsRawHandle, FromRawHandle, OwnedHandle},
+        process::CommandExt as _,
     },
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     ptr::{null, null_mut},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
@@ -35,7 +36,7 @@ struct Profile {
 }
 
 impl Profile {
-    fn create(work: &Path) -> Result<Self> {
+    fn create(work: &Path, cancel: &AtomicBool) -> Result<Self> {
         let mut nonce = [0u8; 12];
         getrandom::fill(&mut nonce).map_err(|error| anyhow::anyhow!("{error}"))?;
         let identity = format!(
@@ -70,16 +71,16 @@ impl Profile {
         let icacls = system_root().join("System32/icacls.exe");
         let grant = format!("*{sid_text_value}:(OI)(CI)M");
         for args in [["/grant", &grant], ["/setintegritylevel", "(OI)(CI)L"]] {
-            let exit = Command::new(&icacls)
+            let mut command = Command::new(&icacls);
+            command
                 .arg(work)
                 .args(args)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()?;
+                .creation_flags(CREATE_NO_WINDOW);
+            let output = tasks::execute_cancellable(command, work, 4, cancel)?;
             ensure!(
-                exit.success(),
-                "Could not set access on the temporary AppContainer directory"
+                output.success,
+                "Could not set access on the temporary AppContainer directory: {}",
+                output.text
             );
         }
         Ok(profile)
@@ -193,18 +194,29 @@ fn quote(arg: &OsStr, line: &mut Vec<u16>) {
     line.push(b'"' as u16);
 }
 
-fn env_block(work: &Path) -> Vec<u16> {
+fn env_block(work: &Path, isolated_extension: bool) -> Vec<u16> {
     let mut env = Vec::new();
     for (key, value) in [
         (
             "LOCALAPPDATA",
-            std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| {
-                crate::platform::home()
-                    .join("AppData/Local")
-                    .into_os_string()
-            }),
+            if isolated_extension {
+                work.as_os_str().to_owned()
+            } else {
+                std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| {
+                    crate::platform::home()
+                        .join("AppData/Local")
+                        .into_os_string()
+                })
+            },
         ),
-        ("PATH", std::env::var_os("PATH").unwrap_or_default()),
+        (
+            "PATH",
+            if isolated_extension {
+                system_root().join("System32").into_os_string()
+            } else {
+                std::env::var_os("PATH").unwrap_or_default()
+            },
+        ),
         ("PYTHONIOENCODING", OsString::from("utf-8")),
         ("SystemRoot", system_root().into_os_string()),
         ("TEMP", work.join(".karrycode-tmp").into_os_string()),
@@ -221,8 +233,20 @@ fn env_block(work: &Path) -> Vec<u16> {
 }
 
 pub(super) fn probe(temp: &Path, relative: &Path, command: &Command) -> Result<()> {
+    probe_cancellable(temp, relative, command, &AtomicBool::new(false), 15, false)
+}
+
+pub(super) fn probe_cancellable(
+    temp: &Path,
+    relative: &Path,
+    command: &Command,
+    cancel: &AtomicBool,
+    timeout: u64,
+    extension: bool,
+) -> Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(timeout);
     let exe = executable(command)?;
-    let first = probe_executable(temp, relative, &exe);
+    let first = probe_executable(temp, relative, &exe, cancel, timeout.min(5));
     if first.is_ok() || !can_stage_runtime(&exe) {
         return first;
     }
@@ -231,8 +255,20 @@ pub(super) fn probe(temp: &Path, relative: &Path, command: &Command) -> Result<(
         "Runtime installation path is missing"
     ))?;
     let runtime = temp.join("work/.karrycode-runtime");
-    copy_runtime(install, &runtime)?;
-    probe_executable(temp, relative, &runtime.join(exe.file_name().unwrap()))
+    let minimal_python = extension
+        && exe.file_name().and_then(OsStr::to_str).is_some_and(|name| {
+            name.eq_ignore_ascii_case("python.exe") || name.eq_ignore_ascii_case("python3.exe")
+        });
+    copy_runtime(install, &runtime, cancel, deadline, minimal_python)?;
+    let left = deadline.saturating_duration_since(Instant::now()).as_secs();
+    ensure!(left > 0, "AppContainer preparation exceeded its time limit");
+    probe_executable(
+        temp,
+        relative,
+        &runtime.join(exe.file_name().unwrap()),
+        cancel,
+        left.min(5),
+    )
 }
 
 fn can_stage_runtime(exe: &Path) -> bool {
@@ -266,15 +302,34 @@ fn can_stage_runtime(exe: &Path) -> bool {
     false
 }
 
-fn copy_runtime(source: &Path, target: &Path) -> Result<()> {
+fn copy_runtime(
+    source: &Path,
+    target: &Path,
+    cancel: &AtomicBool,
+    deadline: Instant,
+    minimal_python: bool,
+) -> Result<()> {
     let mut directories = vec![(source.to_owned(), target.to_owned())];
     let mut total = 0u64;
     let mut count = 0;
-    while let Some((source, target)) = directories.pop() {
+    while let Some((folder, target)) = directories.pop() {
         std::fs::create_dir(&target)?;
-        for entry in std::fs::read_dir(source)? {
+        for entry in std::fs::read_dir(&folder)? {
+            ensure!(
+                !cancel.load(Ordering::Relaxed) && Instant::now() < deadline,
+                "AppContainer runtime staging stopped or timed out"
+            );
             let entry = entry?;
             let meta = std::fs::symlink_metadata(entry.path())?;
+            if minimal_python
+                && !python_runtime_entry(
+                    folder.strip_prefix(source)?,
+                    &entry.file_name(),
+                    meta.is_dir(),
+                )
+            {
+                continue;
+            }
             if entry.file_name() == "__pycache__"
                 || crate::safe_files::is_link(&meta)
                 || super::permissions::protected(Path::new(&entry.file_name()))
@@ -305,7 +360,35 @@ fn copy_runtime(source: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-fn probe_executable(temp: &Path, relative: &Path, exe: &Path) -> Result<()> {
+fn python_runtime_entry(directory: &Path, entry: &OsStr, is_dir: bool) -> bool {
+    let name = entry.to_string_lossy().to_ascii_lowercase();
+    if directory.as_os_str().is_empty() {
+        return if is_dir {
+            matches!(name.as_str(), "lib" | "dlls")
+        } else {
+            matches!(name.as_str(), "python.exe" | "python3.exe")
+                || [".dll", ".zip", "._pth"]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix))
+        };
+    }
+    if is_dir {
+        !matches!(
+            name.as_str(),
+            "site-packages" | "__pycache__" | "test" | "tests"
+        )
+    } else {
+        !name.ends_with(".pyc")
+    }
+}
+
+fn probe_executable(
+    temp: &Path,
+    relative: &Path,
+    exe: &Path,
+    cancel: &AtomicBool,
+    timeout: u64,
+) -> Result<()> {
     let mut probe = Command::new(exe);
     if exe.file_name().and_then(OsStr::to_str).is_some_and(|file| {
         file.eq_ignore_ascii_case("powershell.exe") || file.eq_ignore_ascii_case("pwsh.exe")
@@ -319,7 +402,7 @@ fn probe_executable(temp: &Path, relative: &Path, exe: &Path) -> Result<()> {
     } else {
         probe.arg("--version");
     }
-    let output = execute(temp, relative, &probe, 5, &AtomicBool::new(false))?;
+    let output = execute(temp, relative, &probe, timeout, cancel)?;
     ensure!(
         output.success,
         "AppContainer probe could not run the selected executable: {}",
@@ -335,6 +418,17 @@ pub(super) fn execute(
     timeout: u64,
     cancel: &AtomicBool,
 ) -> Result<tasks::Output> {
+    execute_input(temp, relative, command, timeout, cancel, None)
+}
+
+pub(super) fn execute_input(
+    temp: &Path,
+    relative: &Path,
+    command: &Command,
+    timeout: u64,
+    cancel: &AtomicBool,
+    payload: Option<&[u8]>,
+) -> Result<tasks::Output> {
     tasks::suppress_loader_dialogs();
     ensure!(
         !cancel.load(Ordering::Relaxed),
@@ -342,7 +436,7 @@ pub(super) fn execute(
     );
     let work = temp.join("work");
     std::fs::create_dir_all(work.join(".karrycode-tmp"))?;
-    let profile = Profile::create(&work)?;
+    let profile = Profile::create(&work, cancel)?;
     let mut exe = executable(command)?;
     let staged = work
         .join(".karrycode-runtime")
@@ -361,10 +455,13 @@ pub(super) fn execute(
         quote(arg, &mut line);
     }
     line.push(0);
-    let mut env = env_block(&work);
+    let mut env = env_block(&work, payload.is_some());
     let out = tempfile::tempfile()?;
     let err = tempfile::tempfile()?;
-    let input = OpenOptions::new().read(true).open("NUL")?;
+    let input = match payload {
+        Some(value) => tasks::stdin_file(value)?,
+        None => OpenOptions::new().read(true).open("NUL")?,
+    };
     let redirect = |file: &File| file.as_raw_handle() as HANDLE;
     let handles = [redirect(&input), redirect(&out), redirect(&err)];
     for handle in handles {
@@ -397,6 +494,12 @@ pub(super) fn execute(
     let job_owner = unsafe { OwnedHandle::from_raw_handle(job) };
     let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if payload.is_some() {
+        limits.BasicLimitInformation.LimitFlags |=
+            JOB_OBJECT_LIMIT_JOB_MEMORY | JOB_OBJECT_LIMIT_ACTIVE_PROCESS;
+        limits.BasicLimitInformation.ActiveProcessLimit = 8;
+        limits.JobMemoryLimit = 512 * 1024 * 1024;
+    }
     win(unsafe {
         SetInformationJobObject(
             job,

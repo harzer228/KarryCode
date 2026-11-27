@@ -261,6 +261,15 @@ pub(super) fn execute(child: Command, directory: &Path, timeout: u64) -> Result<
 pub(super) struct Output {
     pub success: bool,
     pub text: String,
+    pub stdout: String,
+}
+
+pub(super) fn stdin_file(payload: &[u8]) -> Result<std::fs::File> {
+    use std::io::{Seek, Write};
+    let mut file = tempfile::tempfile()?;
+    file.write_all(payload)?;
+    file.rewind()?;
+    Ok(file)
 }
 
 fn discard_inherited_env(name: &str) -> bool {
@@ -274,10 +283,30 @@ fn discard_inherited_env(name: &str) -> bool {
 }
 
 pub(super) fn execute_cancellable(
+    child: Command,
+    directory: &Path,
+    timeout: u64,
+    cancel: &AtomicBool,
+) -> Result<Output> {
+    execute_inner(child, directory, timeout, cancel, None)
+}
+
+pub(super) fn execute_payload(
+    child: Command,
+    directory: &Path,
+    timeout: u64,
+    cancel: &AtomicBool,
+    payload: &[u8],
+) -> Result<Output> {
+    execute_inner(child, directory, timeout, cancel, Some(payload))
+}
+
+fn execute_inner(
     mut child: Command,
     directory: &Path,
     timeout: u64,
     cancel: &AtomicBool,
+    payload: Option<&[u8]>,
 ) -> Result<Output> {
     #[cfg(windows)]
     suppress_loader_dialogs();
@@ -285,7 +314,10 @@ pub(super) fn execute_cancellable(
     let stderr = tempfile::tempfile()?;
     child
         .current_dir(directory)
-        .stdin(Stdio::null())
+        .stdin(match payload {
+            Some(value) => Stdio::from(stdin_file(value)?),
+            None => Stdio::null(),
+        })
         .stdout(stdout.try_clone()?)
         .stderr(stderr.try_clone()?);
     for (key, _) in std::env::vars_os() {
@@ -294,7 +326,7 @@ pub(super) fn execute_cancellable(
         }
     }
     crate::platform::require_standard_user()?;
-    let status = run_process(child, &stdout, &stderr, timeout, cancel)?;
+    let status = run_process(child, &stdout, &stderr, timeout, cancel, payload.is_some())?;
     collected(
         stdout,
         stderr,
@@ -344,6 +376,7 @@ pub(super) fn collected(
             "Exit: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
             status.unwrap_or_else(str::to_owned)
         ),
+        stdout,
     })
 }
 
@@ -420,12 +453,13 @@ fn run_process(
     stderr: &std::fs::File,
     timeout: u64,
     cancel: &AtomicBool,
+    limited: bool,
 ) -> Result<Result<std::process::ExitStatus, &'static str>> {
     ensure!(
         !cancel.load(Ordering::Relaxed),
         "Command canceled before start"
     );
-    let mut process = ProcessTree::spawn(command).context(tr!(
+    let mut process = ProcessTree::spawn_limited(command, limited).context(tr!(
         "Не удалось запустить процесс",
         "Could not start the process"
     ))?;
@@ -462,11 +496,41 @@ impl ProcessTree {
     pub(super) fn child_mut(&mut self) -> &mut std::process::Child {
         &mut self.0
     }
-    pub(super) fn spawn(mut command: Command) -> Result<Self> {
+    pub(super) fn spawn(command: Command) -> Result<Self> {
+        Self::spawn_limited(command, false)
+    }
+
+    fn spawn_limited(mut command: Command, limited: bool) -> Result<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
             command.process_group(0);
+            if limited {
+                // Inherited by the interpreter and all sandbox descendants.
+                unsafe {
+                    command.pre_exec(|| {
+                        for (resource, amount) in [
+                            (libc::RLIMIT_AS, 512 * 1024 * 1024),
+                            (libc::RLIMIT_FSIZE, 16 * 1024 * 1024),
+                            (libc::RLIMIT_CPU, 15),
+                        ] {
+                            let bounds = libc::rlimit {
+                                rlim_cur: amount,
+                                rlim_max: amount,
+                            };
+                            if libc::setrlimit(resource, &bounds) != 0 {
+                                return Err(std::io::Error::last_os_error());
+                            }
+                        }
+                        Ok(())
+                    });
+                }
+            }
+        }
+        #[cfg(windows)]
+        if limited {
+            use std::os::windows::process::CommandExt as _;
+            command.creation_flags(windows_sys::Win32::System::Threading::CREATE_NO_WINDOW);
         }
         let child = command.spawn()?;
         #[cfg(windows)]
@@ -477,6 +541,10 @@ impl ProcessTree {
             let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
             let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
             limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if limited {
+                limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_JOB_MEMORY;
+                limits.JobMemoryLimit = 512 * 1024 * 1024;
+            }
             if job.is_null()
                 || unsafe {
                     SetInformationJobObject(

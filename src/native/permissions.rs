@@ -12,6 +12,9 @@ pub(super) const PLAN_ACTIONS: &[&str] = &[
     "stat",
     "inspect_project",
     "ask_user",
+    "read_many",
+    "read_tool_result",
+    "plan",
 ];
 
 pub(super) fn plan_allows_action(action: &Value) -> bool {
@@ -33,6 +36,8 @@ pub(super) fn plan_allows_command(command: &str) -> bool {
                 | "/theme"
                 | "/agents"
                 | "/tools"
+                | "/tasks"
+                | "/config"
                 | "/setting"
                 | "/cd"
                 | "/status"
@@ -40,6 +45,7 @@ pub(super) fn plan_allows_command(command: &str) -> bool {
                 | "/quit"
                 | "/exit"
                 | "/model"
+                | "/model default"
                 | "/models"
                 | "/provider"
                 | "/providers"
@@ -180,6 +186,8 @@ pub(super) fn tool_root(mode: Mode, project: &Path, action: &Value) -> Result<Pa
                     | "search"
                     | "create_file"
                     | "apply_changes"
+                    | "apply_patch"
+                    | "read_many"
                     | "edit"
             )
         ),

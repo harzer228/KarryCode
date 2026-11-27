@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- Keep a structured work plan through `/compact` and `/sessions`, review it through `/code`, and follow progress in `/tasks`.
+- Add profile and project TOML model configuration in `/config` with encrypted, endpoint-bound credentials and per-chat selection.
+- Add `read_many`, conflict-checked `apply_patch` and paged `read_tool_result`.
+- Create and test local tools and skills with `/creator`. Approve exact revisions, then manage or restore them through `/extensions`.
+- Add appearance packs, interface dictionaries, data-only panels and the `--safe-ui` recovery option.
+
+- Run one task with `-p` or `--print`, including tasks read from stdin. The reply goes to stdout, progress goes to stderr, and the chat remains temporary.
+- Compact older messages with `/compact` or automatically near the model's input limit. Keep recent messages and complete tool rounds.
+- Give each model action its own named tool and argument schema. Continue accepting replies written for the legacy `project` tool.
+- Open an explicit project folder even if the terminal's previous working directory was removed.
+- Restore blocking mode on accepted preview sockets so Windows reads honor the configured timeouts.
+
 ## 1.2-beta
 
 - Refresh the chat header, startup notice and command suggestions immediately when switching languages.

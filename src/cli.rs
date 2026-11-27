@@ -10,6 +10,7 @@ Options:
                       final reply to stdout and progress to stderr. Use - to
                       read the task from stdin. Prompts that need approval are
                       declined.
+  --safe-ui           Start with built-in console appearance and language.
   -h, --help          Show this help.
   -V, --version       Show the version.";
 
@@ -26,6 +27,7 @@ pub enum Command {
     Run {
         folder: Option<PathBuf>,
         print: Option<Task>,
+        safe_ui: bool,
     },
 }
 
@@ -40,9 +42,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
     }
     let mut folder = None;
     let mut print = None;
+    let mut safe_ui = false;
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
         match arg.to_str() {
+            Some("--safe-ui") => safe_ui = true,
             Some("-p" | "--print") => {
                 ensure!(
                     print.is_none(),
@@ -72,7 +76,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Command> {
             }
         }
     }
-    Ok(Command::Run { folder, print })
+    Ok(Command::Run {
+        folder,
+        print,
+        safe_ui,
+    })
 }
 
 /// Normalizes a headless task and rejects input the one-shot runner cannot
@@ -119,6 +127,7 @@ mod tests {
         let expected = Command::Run {
             folder: Some("project".into()),
             print: Some(Task::Text("fix the tests".into())),
+            safe_ui: false,
         };
         assert_eq!(run(&["project", "-p", "fix the tests"]).unwrap(), expected);
         assert_eq!(run(&["-p", "fix the tests", "project"]).unwrap(), expected);
@@ -130,14 +139,16 @@ mod tests {
             run(&[]).unwrap(),
             Command::Run {
                 folder: None,
-                print: None
+                print: None,
+                safe_ui: false,
             }
         );
         assert_eq!(
             run(&["project"]).unwrap(),
             Command::Run {
                 folder: Some("project".into()),
-                print: None
+                print: None,
+                safe_ui: false,
             }
         );
     }
@@ -148,14 +159,28 @@ mod tests {
             run(&["-p", "-"]).unwrap(),
             Command::Run {
                 folder: None,
-                print: Some(Task::Stdin)
+                print: Some(Task::Stdin),
+                safe_ui: false,
             }
         );
         assert_eq!(
             run(&["-p", "--explain"]).unwrap(),
             Command::Run {
                 folder: None,
-                print: Some(Task::Text("--explain".into()))
+                print: Some(Task::Text("--explain".into())),
+                safe_ui: false,
+            }
+        );
+    }
+
+    #[test]
+    fn safe_ui_accepts_a_project_folder() {
+        assert_eq!(
+            run(&["--safe-ui", "folder"]).unwrap(),
+            Command::Run {
+                folder: Some("folder".into()),
+                print: None,
+                safe_ui: true,
             }
         );
     }

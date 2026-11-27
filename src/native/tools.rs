@@ -6,6 +6,8 @@ pub(super) const LEGACY_TOOL: &str = "project";
 
 const ALL_ACTIONS: &[&str] = &[
     "read",
+    "read_many",
+    "read_tool_result",
     "list",
     "search",
     "glob",
@@ -26,6 +28,8 @@ const ALL_ACTIONS: &[&str] = &[
     "edit",
     "create_file",
     "apply_changes",
+    "apply_patch",
+    "extension_author",
     "request_permissions",
     "run",
     "run_task",
@@ -36,12 +40,14 @@ const ALL_ACTIONS: &[&str] = &[
 
 const ROOT_TOOLS: &[&str] = &[
     "read",
+    "read_many",
     "list",
     "search",
     "glob",
     "stat",
     "create_file",
     "apply_changes",
+    "apply_patch",
     "edit",
 ];
 
@@ -72,6 +78,11 @@ pub(super) fn actions(mode: RequestMode) -> Vec<&'static str> {
         worker,
         delegate_limit,
         desktop,
+        headless,
+        creator,
+        browser,
+        search,
+        mcp,
     } = mode;
     if worker {
         return permissions::WORKER_ACTIONS.to_vec();
@@ -81,6 +92,8 @@ pub(super) fn actions(mode: RequestMode) -> Vec<&'static str> {
     }
     let mut actions = vec![
         "read",
+        "read_many",
+        "read_tool_result",
         "list",
         "search",
         "glob",
@@ -107,6 +120,7 @@ pub(super) fn actions(mode: RequestMode) -> Vec<&'static str> {
             "edit",
             "create_file",
             "apply_changes",
+            "apply_patch",
             "request_permissions",
             "run",
             "run_task",
@@ -116,7 +130,30 @@ pub(super) fn actions(mode: RequestMode) -> Vec<&'static str> {
         if delegate_limit > 0 {
             actions.push("delegate");
         }
+        if creator && !headless {
+            actions.push("extension_author");
+        }
     }
+    if headless {
+        actions.retain(|name| {
+            !matches!(
+                *name,
+                "ask_user"
+                    | "request_permissions"
+                    | "delegate"
+                    | "computer_list"
+                    | "computer_observe"
+                    | "computer_input"
+                    | "mcp"
+            )
+        });
+    }
+    actions.retain(|name| match *name {
+        "browser" => browser,
+        "web_search" => search,
+        "mcp" => mcp,
+        _ => true,
+    });
     actions
 }
 
@@ -138,7 +175,10 @@ pub(super) fn names(mode: RequestMode) -> Vec<&'static str> {
 }
 
 pub(super) fn known(name: &str) -> bool {
-    name.is_empty() || name == LEGACY_TOOL || ALL_ACTIONS.contains(&name)
+    name.is_empty()
+        || name == LEGACY_TOOL
+        || ALL_ACTIONS.contains(&name)
+        || super::extensions::tool_name(name)
 }
 
 fn object(properties: Value, required: &[&str]) -> Value {
@@ -163,6 +203,19 @@ fn definition(name: &str, mode: RequestMode) -> (String, Value) {
                 json!({"path":text,"offset":integer,"limit":integer}),
                 &["path"],
             ),
+        ),
+        "read_many" => (
+            "Read up to 12 UTF-8 project files or line ranges. Offset is zero based.",
+            object(
+                json!({"files":{"type":"array","maxItems":12,"items":object(json!({
+                "path":text,"offset":integer,"limit":integer
+            }), &["path"])}}),
+                &["files"],
+            ),
+        ),
+        "read_tool_result" => (
+            "Read more of a recent tool result using its ID and a UTF-8 byte offset.",
+            object(json!({"id":text,"offset":integer,"limit":integer}), &["id"]),
         ),
         "list" => (
             "List a project folder (default: project root).",
@@ -200,8 +253,40 @@ fn definition(name: &str, mode: RequestMode) -> (String, Value) {
             object(json!({"staged":{"type":"boolean"}}), &[]),
         ),
         "plan" => (
-            "Record your step-by-step plan.",
-            object(json!({"text":text}), &["text"]),
+            "Define a plan with measurable steps or update one step. Completed and blocked steps require evidence or a blocker.",
+            object(
+                json!({
+                    "operation":{"type":"string","enum":["define","update"]},
+                    "goal":text,
+                    "constraints":{"type":"array","maxItems":12,"items":text},
+                    "steps":{"type":"array","maxItems":24,"items":object(json!({
+                        "id":text,"title":text,"acceptance":text
+                    }), &["id","title","acceptance"])},
+                    "id":text,
+                    "status":{"type":"string","enum":["pending","in_progress","completed","blocked"]},
+                    "evidence":text
+                }),
+                &["operation"],
+            ),
+        ),
+        "apply_patch" => (
+            "Apply a batch of single-file unified diffs to existing project files. Conflicting hunks stop the batch.",
+            object(
+                json!({"files":{"type":"array","maxItems":24,"items":object(
+                    json!({"path":text,"patch":text}), &["path", "patch"]
+                )}}),
+                &["files"],
+            ),
+        ),
+        "extension_author" => (
+            "Inspect, validate, test or propose installing a draft package under .karrycode/extensions/<id>.",
+            object(
+                json!({
+                    "operation":{"type":"string","enum":["guide","validate","test","install"]},
+                    "id":text
+                }),
+                &["operation"],
+            ),
         ),
         "skill" => (
             "Load a skill by name, or its resource file by path.",
@@ -341,11 +426,17 @@ fn definition(name: &str, mode: RequestMode) -> (String, Value) {
 }
 
 /// The `tools` array of a request in the provider's wire format.
-pub(super) fn request_tools(provider: &Provider, mode: RequestMode) -> Value {
-    names(mode)
-        .into_iter()
-        .map(|name| {
-            let (description, parameters) = definition(name, mode);
+pub(super) fn request_tools(
+    provider: &Provider,
+    mode: RequestMode,
+    extensions: &[super::extensions::Tool],
+) -> Value {
+    let builtin = names(mode).into_iter().map(|name| {
+        let (description, parameters) = definition(name, mode);
+        (name, description, parameters)
+    });
+    builtin.chain(extensions.iter().map(|tool| (tool.name.as_str(), tool.description.clone(), tool.schema.clone())))
+        .map(|(name, description, parameters)| {
             if provider.responses() {
                 json!({"type":"function","name":name,"description":description,"parameters":parameters,"strict":false})
             } else if provider.anthropic() {
@@ -369,6 +460,10 @@ pub(super) fn decode(name: &str, arguments: &str) -> Option<Value> {
     };
     if value.is_null() {
         value = json!({});
+    }
+    if super::extensions::tool_name(name) {
+        value.as_object()?;
+        return Some(json!({"action":name,"input":value}));
     }
     let object = value.as_object_mut()?;
     if name == "edit" && !object.get("edit").is_some_and(Value::is_object) {
@@ -415,13 +510,18 @@ pub(super) fn replay(name: &str, arguments: &str) -> (String, Value) {
             object.entry(key).or_insert(value);
         }
     }
+    if super::extensions::tool_name(&name)
+        && let Some(args) = object.remove("input").filter(Value::is_object)
+    {
+        return (name, args);
+    }
     (name, input)
 }
 
 /// Error for a call whose tool name is not one of KarryCode's tools.
 pub(super) fn unknown(action: &Value) -> Option<anyhow::Error> {
     let name = action["action"].as_str().unwrap_or_default();
-    (!ALL_ACTIONS.contains(&name)).then(|| {
+    (!ALL_ACTIONS.contains(&name) && !super::extensions::tool_name(name)).then(|| {
         anyhow::anyhow!(trf!(
             "Неизвестный инструмент «{}». Вызови один из доступных инструментов.",
             "Unknown tool '{}'. Call one of the provided tools.",
@@ -433,6 +533,19 @@ pub(super) fn unknown(action: &Value) -> Option<anyhow::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_tool_arguments_cannot_override_dispatch_and_round_trip_on_the_wire() {
+        let name = "ext_translations_check";
+        let inputs = r#"{"key":"greet","action":"shell","input":{"value":"test"}}"#;
+        let action = decode(name, inputs).unwrap();
+        assert_eq!(action["action"], name);
+        assert_eq!(action["input"]["action"], "shell");
+        assert_eq!(
+            replay(name, &action.to_string()),
+            (name.to_owned(), serde_json::from_str(inputs).unwrap())
+        );
+    }
 
     #[test]
     fn every_action_has_a_tool_and_every_tool_decodes_to_an_allowed_action() {

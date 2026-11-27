@@ -46,6 +46,65 @@ impl Workspace {
         }
     }
 
+    pub fn extension(
+        script: &str,
+        filename: &str,
+        files: &BTreeMap<String, String>,
+    ) -> Result<Self> {
+        let temp = crate::platform::private_dir()?;
+        let work = temp.path().join("work");
+        fs::create_dir_all(&work)?;
+        fs::write(work.join(filename), script)?;
+        let mut before = Snapshot::new();
+        for (name, text) in files {
+            let path = Path::new(name);
+            ensure!(
+                crate::identity::valid(path) && !permissions::protected(path),
+                "Invalid extension file"
+            );
+            let target = work.join(path);
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut file = fs::File::create_new(target)?;
+            use std::io::Write as _;
+            file.write_all(text.as_bytes())?;
+            before.insert(path.to_owned(), text.clone());
+        }
+        Ok(Self { temp, before })
+    }
+
+    pub fn execute_extension(
+        &self,
+        command: &Command,
+        timeout: u64,
+        cancel: &AtomicBool,
+        payload: &[u8],
+    ) -> Result<tasks::Output> {
+        #[cfg(windows)]
+        {
+            let relative = Path::new("");
+            windows::probe_cancellable(self.temp.path(), relative, command, cancel, 12, true)
+                .map_err(|error| {
+                    anyhow::anyhow!("Extension runtime is unavailable in AppContainer: {error:#}")
+                })?;
+            windows::execute_input(
+                self.temp.path(),
+                relative,
+                command,
+                timeout,
+                cancel,
+                Some(payload),
+            )
+        }
+        #[cfg(unix)]
+        {
+            let mut shell = linux_command(self.temp.path(), Path::new(""))?;
+            shell.arg(command.get_program()).args(command.get_args());
+            tasks::execute_payload(shell, self.temp.path(), timeout, cancel, payload)
+        }
+    }
+
     pub fn probe(&self, relative: &Path, command: &Command) -> Result<()> {
         #[cfg(windows)]
         return windows::probe(self.temp.path(), relative, command);

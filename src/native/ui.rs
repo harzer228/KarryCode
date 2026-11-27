@@ -39,14 +39,13 @@ use std::{
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-const MAX_CONTENT: usize = 120;
 const MENU_LIMIT: usize = 6;
 const CTX_TOKENS: u32 = 128_000;
 const INPUT_LIMIT: usize = 64 * 1024;
 const PASTE_LIMIT: usize = 192 * 1024;
 
 /// Commands offered by the slash menu. Descriptions are localized.
-fn commands() -> [(&'static str, &'static str); 30] {
+fn commands() -> [(&'static str, &'static str); 35] {
     [
         ("/theme", tr!("Оформление агента", "Agent appearance")),
         (
@@ -69,6 +68,14 @@ fn commands() -> [(&'static str, &'static str); 30] {
         ("/cd", tr!("Сменить папку проекта", "Change project folder")),
         ("/setting", tr!("Настройки агента", "Agent settings")),
         ("/tools", tr!("Доступные инструменты", "Available tools")),
+        ("/tasks", tr!("План и ход работы", "Plan and task progress")),
+        ("/config", tr!("Конфиги моделей", "Model configuration")),
+        ("/creator", tr!("Создавать расширения", "Author extensions")),
+        (
+            "/extensions",
+            tr!("Управлять расширениями", "Manage extensions"),
+        ),
+        ("/panels", tr!("Пользовательские панели", "Custom panels")),
         ("/search", tr!("Поиск в интернете", "Search the web")),
         (
             "/permissions",
@@ -563,7 +570,11 @@ enum Notice {
 
 impl Notice {
     fn text(&self) -> &str {
-        self.text_in(crate::language::english())
+        if let Self::Localized { ru, en } = self {
+            crate::language::translate(ru, en)
+        } else {
+            self.text_in(crate::language::english())
+        }
     }
 
     fn text_in(&self, english: bool) -> &str {
@@ -610,6 +621,8 @@ pub struct Screen {
     #[cfg(unix)]
     enhanced_keys: bool,
     theme: theme::Theme,
+    appearance: Option<super::appearance::Appearance>,
+    custom_locale: bool,
     tick: usize,
     turn: Option<Turn>,
     stats: Stats,
@@ -699,6 +712,8 @@ impl Screen {
             #[cfg(unix)]
             enhanced_keys: false,
             theme: theme::Theme::Sage,
+            appearance: None,
+            custom_locale: false,
             tick: 0,
             turn: None,
             stats: Stats::default(),
@@ -1453,15 +1468,24 @@ impl Screen {
             self.background = out;
             return Ok(());
         }
-        let content = width.saturating_sub(4).clamp(40, MAX_CONTENT);
+        let layout = self
+            .appearance
+            .as_ref()
+            .map(|appearance| appearance.layout());
+        let max_width = layout.map_or(120, |layout| layout.max_width);
+        let width_limit = width.saturating_sub(4).clamp(40, max_width);
+        let content = width_limit;
         let margin = (width - content) / 2;
-        let show_mark = content >= 70 && height >= 26;
-        let header_height = if self.header_hidden {
-            1 // Keep the top row for the scroll position.
-        } else {
-            self.header(&mut out, margin, content, model, directory, show_mark)?;
-            if show_mark { 10 } else { 5 }
-        };
+        let header_mode = layout.map_or(super::appearance::Header::Full, |layout| layout.header);
+        let show_mark =
+            matches!(header_mode, super::appearance::Header::Full) && content >= 70 && height >= 26;
+        let header_height =
+            if self.header_hidden || matches!(header_mode, super::appearance::Header::Hidden) {
+                1 // Keep the top row for the scroll position.
+            } else {
+                self.header(&mut out, margin, content, model, directory, show_mark)?;
+                if show_mark { 10 } else { 5 }
+            };
 
         let streaming = pending.is_some();
         let notice = if self.notice.is_empty() && !self.pastes.is_empty() {
@@ -1478,9 +1502,9 @@ impl Screen {
         let mut menu_rows = menu.len().clamp(1, MENU_LIMIT);
         menu_rows = menu_rows.min(height.saturating_sub(header_height + 7).max(1));
         let mut notice_rows = usize::from(!notice.is_empty());
-        let mut gap_rows = 1usize;
+        let mut gap_rows = usize::from(layout.is_none_or(|layout| !layout.compact_spacing));
         let composer_rows = (self.editor.buffer.iter().filter(|&&c| c == '\n').count() + 1)
-            .min(3)
+            .min(layout.map_or(3, |layout| layout.input_lines))
             .min(height.saturating_sub(header_height + menu_rows + 5).max(1));
         let (conv_rows, notice_y, box_top) = loop {
             let top = height.saturating_sub(2 + composer_rows + menu_rows);
@@ -1609,40 +1633,59 @@ impl Screen {
             }
             put_line(&mut out, margin, y, &line, content)?;
         }
-        let inner = content - 6;
+        let inset = layout.map_or(0, |layout| layout.input_inset);
+        let prompt_width = content.saturating_sub(2 * inset);
+        let prompt_left = margin + inset;
+        let frame = layout
+            .map_or(super::appearance::Border::default(), |layout| layout.border)
+            .frame();
+        let inner = prompt_width - 6;
         let (texts, caret_row, caret) = self.editor.composer(inner, composer_rows);
         let border = Style::fg(render::LINE);
         let mut top = Line::new();
-        top.push("╭", border);
+        top.push(frame.tl, border);
         if self.planning {
-            top.push("─", border);
+            top.push(frame.line, border);
             top.push(
-                " PLAN MODE ",
+                tr!(" ПЛАН ", " PLAN MODE "),
                 Style::fg(render::CODE).with_bg(render::BRAND).bold(),
             );
         }
-        top.push("─".repeat(content.saturating_sub(top.width() + 1)), border);
-        top.push("╮", border);
-        put_line(&mut out, margin, box_top, &top, content)?;
+        top.push(
+            frame
+                .line
+                .repeat(prompt_width.saturating_sub(top.width() + 1)),
+            border,
+        );
+        top.push(frame.tr, border);
+        put_line(&mut out, prompt_left, box_top, &top, prompt_width)?;
         for (index, text) in texts.iter().enumerate() {
             let mut row = Line::new();
-            row.push("│ ", border);
+            row.push(frame.side, border);
+            row.push(" ", border);
             row.push(if index == 0 { "› " } else { "  " }, Style::brand());
             row.push(text.as_str(), Style::fg(render::FG));
-            row.pad_to(content - 2, Style::plain());
-            row.push(" │", border);
-            put_line(&mut out, margin, box_top + 1 + index, &row, content)?;
+            row.pad_to(prompt_width - 2, Style::plain());
+            row.push(" ", border);
+            row.push(frame.side, border);
+            put_line(
+                &mut out,
+                prompt_left,
+                box_top + 1 + index,
+                &row,
+                prompt_width,
+            )?;
         }
         let mut foot = Line::new();
-        foot.push("╰", border);
-        foot.push("─".repeat(content.saturating_sub(2)), border);
-        foot.push("╯", border);
+        foot.push(frame.bl, border);
+        foot.push(frame.line.repeat(prompt_width.saturating_sub(2)), border);
+        foot.push(frame.br, border);
         put_line(
             &mut out,
-            margin,
+            prompt_left,
             box_top + composer_rows + 1,
             &foot,
-            content,
+            prompt_width,
         )?;
 
         if streaming && self.escape.active(Instant::now()) {
@@ -1708,7 +1751,7 @@ impl Screen {
             }
         }
 
-        let column = margin + 4 + caret;
+        let column = prompt_left + 4 + caret;
         queue!(
             out,
             MoveTo(column as u16, (box_top + 1 + caret_row) as u16),
@@ -1764,7 +1807,18 @@ impl Screen {
             6 => Some(&hint_line),
             _ => None,
         };
-        for (row, mark_line) in render::logo().iter().enumerate() {
+        let logos = self
+            .appearance
+            .as_ref()
+            .map(|appearance| &appearance.layout().logo);
+        let mark = if let Some(rows) = logos.filter(|rows| !rows.is_empty()) {
+            (0..8)
+                .map(|index| Line::of(rows.get(index).map_or("", String::as_str), Style::brand()))
+                .collect()
+        } else {
+            render::logo()
+        };
+        for (row, mark_line) in mark.iter().enumerate() {
             put_line(out, margin, 1 + row, mark_line, 16)?;
             if let Some(line) = info(row) {
                 put_line(out, margin + 18, 1 + row, line, content.saturating_sub(18))?;
@@ -1833,6 +1887,12 @@ impl Screen {
         let left_width = indicator_start.saturating_sub(2);
         let mut line = if streaming {
             self.spinner_line(left_width)
+        } else if self
+            .appearance
+            .as_ref()
+            .is_some_and(|appearance| appearance.layout().compact_status)
+        {
+            Line::of(model, Style::dim()).truncate(left_width)
         } else {
             self.status_line(model, left_width)
         };
@@ -2059,6 +2119,19 @@ impl Screen {
 /// Border geometry of a centered panel, enough for cursor placement.
 struct Panel {
     visible: usize,
+    left: usize,
+    top: usize,
+    width: usize,
+    scroll: usize,
+}
+
+impl Panel {
+    fn hit(&self, column: u16, row: u16) -> Option<usize> {
+        let column = usize::from(column).checked_sub(self.left)?;
+        let row = usize::from(row).checked_sub(self.top + 1)?;
+        (column > 0 && column < self.width.saturating_sub(1) && row < self.visible)
+            .then_some(self.scroll + row)
+    }
 }
 
 struct PanelFrame {
@@ -2107,8 +2180,19 @@ impl Screen {
         } else {
             render::LINE
         });
+        let frame = if self.approval_card {
+            super::appearance::Border::default()
+        } else {
+            self.appearance
+                .as_ref()
+                .map_or(super::appearance::Border::default(), |appearance| {
+                    appearance.layout().border
+                })
+        }
+        .frame();
         let edge = |left: &str, right: &str, text: &str, style: Style| {
             let mut line = Line::of(left, border);
+            line.push(frame.line, border);
             let limit = panel_width.saturating_sub(3);
             let mut label = Line::of(format!(" {text} "), style);
             if label.width() > limit && limit > 0 {
@@ -2118,7 +2202,7 @@ impl Screen {
             line.extend(label);
             let tail = panel_width.saturating_sub(line.width() + 1);
             if tail > 0 {
-                line.push("─".repeat(tail), border);
+                line.push(frame.line.repeat(tail), border);
             }
             line.push(right, border);
             line
@@ -2129,9 +2213,10 @@ impl Screen {
         } else {
             Style::brand().bold()
         };
-        rows.push(edge("╭─", "╮", title, title_style));
+        rows.push(edge(frame.tl, frame.tr, title, title_style));
         for row in 0..visible {
-            let mut line = Line::of("│ ", border);
+            let mut line = Line::of(frame.side, border);
+            line.push(" ", border);
             if let Some(source) = body.get(scroll + row) {
                 if source.width() > inner && inner > 1 {
                     line.extend(source.truncate(inner - 1));
@@ -2141,10 +2226,11 @@ impl Screen {
                 }
             }
             line.pad_to(panel_width.saturating_sub(2), Style::plain());
-            line.push(" │", border);
+            line.push(" ", border);
+            line.push(frame.side, border);
             rows.push(line);
         }
-        rows.push(edge("╰─", "╯", footer.trim(), Style::dim()));
+        rows.push(edge(frame.bl, frame.br, footer.trim(), Style::dim()));
         let cursor = cursor.and_then(|(row, column)| {
             let row = row.checked_sub(scroll)?;
             (row < visible).then_some((
@@ -2196,7 +2282,13 @@ impl Screen {
                 cursor,
             });
         }
-        Ok(Panel { visible })
+        Ok(Panel {
+            visible,
+            left,
+            top,
+            width: panel_width,
+            scroll,
+        })
     }
 
     /// Yes/no panel for destructive or privileged actions. Enter allows, Esc
@@ -2651,6 +2743,139 @@ impl Screen {
         self.cache = None;
         self.background.clear();
         self.panel_frame = None;
+    }
+
+    pub(super) fn set_appearance(
+        &mut self,
+        appearance: Option<super::appearance::Appearance>,
+        custom_locale: bool,
+    ) -> Result<()> {
+        if let Some(next) = &appearance
+            && custom_locale
+        {
+            next.apply_language()?;
+        } else {
+            crate::language::set_dictionary(None)?;
+        }
+        theme::set_overlay(
+            appearance
+                .as_ref()
+                .map_or([None; 7], |appearance| appearance.palette),
+        );
+        self.appearance = appearance;
+        self.custom_locale = custom_locale;
+        self.cache = None;
+        self.panel_frame = None;
+        Ok(())
+    }
+
+    pub(super) fn preview_appearance(
+        &mut self,
+        appearance: &super::appearance::Appearance,
+        details: &str,
+    ) -> Result<bool> {
+        let before = self.appearance.clone();
+        let original_locale = self.custom_locale;
+        self.set_appearance(Some(appearance.clone()), true)?;
+        let sample = format!(
+            "{details}\n\n{}\n{}",
+            appearance.layout().logo.join("\n"),
+            tr!(
+                "Текст ответа · статус · поле ввода",
+                "Reply text · status · composer"
+            )
+        );
+        let result = self.custom_panel(
+            tr!("Предпросмотр оформления", "Appearance preview"),
+            &sample,
+            &[tr!("Применить оформление", "Apply appearance").into()],
+        );
+        self.set_appearance(before, original_locale)?;
+        Ok(result?.is_some())
+    }
+
+    pub(super) fn custom_panel(
+        &mut self,
+        title: &str,
+        text: &str,
+        actions: &[String],
+    ) -> Result<Option<usize>> {
+        let mut selected = 0usize;
+        let mut scroll = 0usize;
+        loop {
+            let width = usize::from(terminal::size()?.0)
+                .saturating_sub(8)
+                .clamp(36, 96)
+                .saturating_sub(4);
+            let mut lines = text
+                .lines()
+                .flat_map(|text| render::wrap(&Line::of(text, Style::fg(render::FG)), width))
+                .collect::<Vec<_>>();
+            let action_start = lines.len();
+            for (index, action) in actions.iter().enumerate() {
+                lines.push(Line::of(
+                    format!("{} {action}", if index == selected { "›" } else { " " }),
+                    if index == selected {
+                        Style::brand().bold()
+                    } else {
+                        Style::dim()
+                    },
+                ));
+            }
+            let panel = self.draw_panel(
+                title,
+                tr!(
+                    "Tab / ↑↓ выбор · Enter действие · PgUp/PgDn прокрутка · Esc назад",
+                    "Tab / ↑↓ select · Enter act · PgUp/PgDn scroll · Esc back"
+                ),
+                &lines,
+                scroll,
+                None,
+            )?;
+            match read_ui_event()? {
+                Event::Key(key) if key.kind != KeyEventKind::Release => {
+                    match normalize_key(key).code {
+                        KeyCode::Esc => return Ok(None),
+                        KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                            return Ok(None);
+                        }
+                        KeyCode::Enter => return Ok((!actions.is_empty()).then_some(selected)),
+                        KeyCode::Down | KeyCode::Tab if !actions.is_empty() => {
+                            selected = (selected + 1) % actions.len();
+                            scroll = (action_start + selected + 1).saturating_sub(panel.visible);
+                        }
+                        KeyCode::Up | KeyCode::BackTab if !actions.is_empty() => {
+                            selected = (selected + actions.len() - 1) % actions.len();
+                            scroll = (action_start + selected + 1).saturating_sub(panel.visible);
+                        }
+                        KeyCode::PageUp | KeyCode::Up => {
+                            scroll = scroll.saturating_sub(panel.visible.max(1))
+                        }
+                        KeyCode::PageDown | KeyCode::Down => {
+                            scroll = (scroll + panel.visible)
+                                .min(lines.len().saturating_sub(panel.visible))
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollUp => {
+                    scroll = scroll.saturating_sub(3)
+                }
+                Event::Mouse(mouse) if mouse.kind == MouseEventKind::ScrollDown => {
+                    scroll = (scroll + 3).min(lines.len().saturating_sub(panel.visible))
+                }
+                Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                    if let Some(row) = panel.hit(mouse.column, mouse.row)
+                        && let Some(index) = row
+                            .checked_sub(action_start)
+                            .filter(|index| *index < actions.len())
+                    {
+                        return Ok(Some(index));
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     pub(super) fn toggle_header(&mut self) {
@@ -3728,6 +3953,8 @@ mod tests {
             #[cfg(unix)]
             enhanced_keys: false,
             theme: theme::Theme::Sage,
+            appearance: None,
+            custom_locale: false,
             tick: 0,
             turn: None,
             stats: Stats::default(),

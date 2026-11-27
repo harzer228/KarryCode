@@ -303,6 +303,7 @@ mod tests {
             bundle.path(),
             &mut workspace,
             Some("Create hello.txt".into()),
+            false,
         )?;
         let bodies = server.join().unwrap()?;
         assert_eq!(bodies.len(), 3);
@@ -312,9 +313,12 @@ mod tests {
             "hi\n"
         );
         assert!(
-            ["Permission request declined", "Запрос разрешения отклонён"]
-                .iter()
-                .any(|text| bodies[2].contains(text))
+            [
+                "Tool unavailable in this mode",
+                "Инструмент недоступен в этом режиме"
+            ]
+            .iter()
+            .any(|text| bodies[2].contains(text))
         );
         assert_eq!(fs::read(state_path(profile.work.path()))?, saved);
         Ok(())

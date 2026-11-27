@@ -87,7 +87,7 @@ pub(super) struct ReasoningLevel {
     pub(super) wire: Option<String>,
 }
 
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ModelSettings {
     pub(super) name: String,
     pub(super) model: String,
@@ -215,7 +215,7 @@ impl ModelSettings {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct SavedModel {
     pub(super) connection: u32,
     #[serde(flatten)]
@@ -723,6 +723,16 @@ pub(super) fn provider_menu(screen: &mut Screen, state: &mut State) -> Result<bo
                 {
                     state.settings.provider_limits.remove(&connection.id);
                 }
+                if edited.key.is_empty()
+                    && state.settings.needs_model_key.contains(&edited.id)
+                    && !screen.confirm(
+                        tr!("Работать без ключа?", "Use keyless access?"),
+                        &edited.url,
+                    )?
+                {
+                    return Ok(false);
+                }
+                state.settings.needs_model_key.remove(&edited.id);
                 state.connections[index] = edited;
                 screen.notice(tr!("Провайдер сохранён.", "Provider saved."));
                 return Ok(true);
@@ -1154,13 +1164,20 @@ pub(super) fn model_menu(
     screen: &mut Screen,
     state: &mut State,
     history: &mut Vec<Message>,
+    choice: &mut Option<super::model_config::Choice>,
 ) -> Result<bool> {
-    let action = screen.models(&state.connections, &state.models, state.active_model)?;
+    let selected = super::model_config::selected_index(state, choice.as_ref())
+        .ok()
+        .flatten();
+    let action = screen.models(&state.connections, &state.models, selected)?;
     match action {
         ModelAction::Close => Ok(false),
         ModelAction::Activate(index) => {
-            let changed = state.active_model != Some(index);
-            state.active_model = Some(index);
+            let changed = state.active_model.is_none();
+            if changed {
+                state.active_model = Some(index);
+            }
+            *choice = super::model_config::choice_at(state, index);
             Ok(changed)
         }
         ModelAction::Add | ModelAction::Catalog => {
@@ -1171,6 +1188,10 @@ pub(super) fn model_menu(
                 .connection(id)
                 .context(tr!("Провайдер не найден", "Missing provider"))?
                 .clone();
+            ensure!(
+                !state.settings.needs_model_key.contains(&connection.id),
+                "Configure authorization for this route through /provider first"
+            );
             if matches!(action, ModelAction::Catalog) {
                 let settings = import_catalog(screen, state, &connection, history)?;
                 return Ok(add_models(state, id, settings));
@@ -1206,6 +1227,9 @@ pub(super) fn model_menu(
         ModelAction::Delete(index) => {
             let model = &state.models[index].settings;
             if screen.confirm(tr!("Удалить модель?", "Delete model?"), &model.name)? {
+                if *choice == super::model_config::choice_at(state, index) {
+                    *choice = None;
+                }
                 state.remove_model(index);
                 return Ok(true);
             }
@@ -1218,6 +1242,10 @@ pub(super) fn model_menu(
                 .context(tr!("Провайдер не найден", "Missing provider"))?
                 .clone();
             let original = saved.settings.model.clone();
+            ensure!(
+                !state.settings.needs_model_key.contains(&connection.id),
+                "Configure authorization for this route through /provider first"
+            );
             let mut draft = saved.settings.clone();
             let mut auto = matches!(action, ModelAction::Auto(_));
             loop {

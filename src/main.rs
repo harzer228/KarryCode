@@ -1,12 +1,18 @@
 macro_rules! tr {
     ($ru:literal, $en:literal) => {
-        if crate::language::english() { $en } else { $ru }
+        crate::language::translate($ru, $en)
     };
 }
 
 macro_rules! trf {
     ($ru:literal, $en:literal $(, $arg:expr)* $(,)?) => {
-        if crate::language::english() { format!($en $(, $arg)*) } else { format!($ru $(, $arg)*) }
+        if crate::language::custom() {
+            crate::language::format_translation($en, crate::language::translate($ru, $en), format!($en $(, $arg)*))
+        } else if crate::language::english() {
+            format!($en $(, $arg)*)
+        } else {
+            format!($ru $(, $arg)*)
+        }
     };
 }
 
@@ -60,7 +66,14 @@ fn main() -> ExitCode {
 }
 
 fn run() -> Result<()> {
-    let (folder, print) = match cli::parse(env::args_os().skip(1))? {
+    if env::args_os().len() == 2
+        && env::args_os()
+            .nth(1)
+            .is_some_and(|arg| arg == native::extensions::WORKER)
+    {
+        return native::extensions::worker();
+    }
+    let (folder, print, safe_ui) = match cli::parse(env::args_os().skip(1))? {
         cli::Command::Help => {
             println!(
                 "KarryCode CLI {}\nAI coding in your terminal.\n\n{}",
@@ -73,7 +86,11 @@ fn run() -> Result<()> {
             println!("KarryCode CLI {RELEASE_VERSION}");
             return Ok(());
         }
-        cli::Command::Run { folder, print } => (folder, print),
+        cli::Command::Run {
+            folder,
+            print,
+            safe_ui,
+        } => (folder, print, safe_ui),
     };
     let root = platform::app_dir()?;
     language::load(&root);
@@ -144,7 +161,7 @@ fn run() -> Result<()> {
     if task.is_none() {
         profile.recent.remember(&root, &workspace);
     }
-    let session = native::run(&mut profile, &root, &mut workspace, task);
+    let session = native::run(&mut profile, &root, &mut workspace, task, safe_ui);
     let saved = profile.save();
     let closed = profile.close();
     saved?;

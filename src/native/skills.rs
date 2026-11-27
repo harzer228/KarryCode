@@ -7,8 +7,10 @@
 
 use anyhow::{Context, Result, ensure};
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 const MAX_FILE: u64 = 256 * 1024;
@@ -24,6 +26,7 @@ pub enum Source {
     Claude,
     Codex,
     Builtin,
+    Extension,
 }
 
 impl Source {
@@ -36,6 +39,7 @@ impl Source {
             Self::Claude => "Claude Code",
             Self::Codex => "Codex",
             Self::Builtin => tr!("встроенный", "builtin"),
+            Self::Extension => tr!("расширение", "extension"),
         }
     }
 }
@@ -47,6 +51,7 @@ pub struct Skill {
     pub source: Source,
     path: Option<PathBuf>,
     builtin: Option<&'static str>,
+    extension: Option<(Arc<BTreeMap<String, String>>, String)>,
 }
 
 pub struct Catalog {
@@ -66,6 +71,28 @@ impl Catalog {
 
     pub fn is_empty(&self) -> bool {
         self.skills.is_empty()
+    }
+
+    pub(super) fn add_extension(&mut self, package: &str, files: &Arc<BTreeMap<String, String>>) {
+        for (path, content) in files.iter() {
+            let Some(folder) = path
+                .strip_prefix("skills/")
+                .and_then(|path| path.strip_suffix("/SKILL.md"))
+            else {
+                continue;
+            };
+            if folder.is_empty() || folder.contains('/') {
+                continue;
+            }
+            if let Ok(mut skill) = parse(content, Path::new(""), folder) {
+                skill.name = format!("{package}/{}", skill.name);
+                skill.source = Source::Extension;
+                skill.extension = Some((Arc::clone(files), format!("skills/{folder}/")));
+                if self.find(&skill.name).is_none() {
+                    self.skills.push(skill);
+                }
+            }
+        }
     }
 }
 
@@ -126,6 +153,18 @@ const BUILTINS: &[Builtin] = &[
     Builtin {
         name: "skill-writer",
         body: include_str!("../../skills/skill-writer/SKILL.md"),
+    },
+    Builtin {
+        name: "create-extension",
+        body: include_str!("../../skills/create-extension/SKILL.md"),
+    },
+    Builtin {
+        name: "configure-models",
+        body: include_str!("../../skills/configure-models/SKILL.md"),
+    },
+    Builtin {
+        name: "design-console",
+        body: include_str!("../../skills/design-console/SKILL.md"),
     },
 ];
 
@@ -239,6 +278,7 @@ pub fn parse(text: &str, path: &Path, fallback_name: &str) -> Result<Skill> {
         source: Source::Project,
         path: (!path.as_os_str().is_empty()).then(|| path.to_owned()),
         builtin: None,
+        extension: None,
     })
 }
 
@@ -292,6 +332,7 @@ fn fallback(name: &str, source: Source) -> Skill {
         source,
         path: None,
         builtin: None,
+        extension: None,
     }
 }
 
@@ -315,7 +356,17 @@ fn read_text(path: &Path) -> Result<String> {
 
 /// Full instruction body for a skill; built-ins stay inside the binary.
 pub fn resource(skill: &Skill, relative: &str) -> Result<String> {
-    let base = skill.path.as_deref().and_then(Path::parent).context(tr!(
+    if let Some((files, prefix)) = &skill.extension {
+        ensure!(
+            crate::identity::valid(Path::new(relative)) && !relative.contains('\\'),
+            "Use a relative skill path"
+        );
+        return files
+            .get(&format!("{prefix}{relative}"))
+            .cloned()
+            .context("Companion file is not in the approved package");
+    }
+    let base = skill.path.as_deref().context(tr!(
         "У этого скилла нет дополнительных файлов",
         "This skill has no companion files"
     ))?;
@@ -323,6 +374,14 @@ pub fn resource(skill: &Skill, relative: &str) -> Result<String> {
 }
 
 pub fn body(skill: &Skill) -> Result<String> {
+    if let Some((files, prefix)) = &skill.extension {
+        return Ok(split_front_matter(
+            files
+                .get(&format!("{prefix}SKILL.md"))
+                .context("Skill is missing from the approved package")?,
+        )
+        .1);
+    }
     if let Some(builtin) = skill.builtin {
         let (_, body) = split_front_matter(builtin);
         return Ok(body);
@@ -340,6 +399,23 @@ pub fn body(skill: &Skill) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn project_skill_resources_resolve_inside_the_skill_folder() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let folder = root.path().join(".karrycode/skills/demo");
+        fs::create_dir_all(&folder)?;
+        fs::write(
+            folder.join("SKILL.md"),
+            "---\nname: demo\n---\nRead the examples.",
+        )?;
+        fs::write(folder.join("example.md"), "Skill example")?;
+        let catalog = discover(root.path(), root.path());
+        let skill = catalog.find("demo").unwrap();
+        assert_eq!(resource(skill, "example.md")?, "Skill example");
+        assert!(resource(skill, "../example.md").is_err());
+        Ok(())
+    }
 
     #[test]
     fn front_matter_is_parsed_with_quotes_and_colons() {

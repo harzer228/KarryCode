@@ -14,7 +14,20 @@ pub(in crate::native) enum Theme {
     HighContrast,
 }
 
-thread_local! { static CURRENT: Cell<Theme> = const { Cell::new(Theme::Sage) }; }
+thread_local! {
+    static CURRENT: Cell<Theme> = const { Cell::new(Theme::Sage) };
+    static OVERLAY: Cell<[Option<Color>; 7]> = const { Cell::new([None; 7]) };
+}
+
+const ROLES: [Color; 7] = [
+    render::BRAND,
+    render::FG,
+    render::DIM,
+    render::LINE,
+    render::CODE,
+    render::CODEFG,
+    render::WARN,
+];
 
 impl Theme {
     pub(in crate::native) const ALL: [Self; 4] = [
@@ -76,17 +89,8 @@ impl Theme {
                 0xFFFFFF, 0xF2F2F2, 0xC5C5C5, 0x969696, 0x262626, 0xFFFFFF, 0xFFE191,
             ],
         };
-        let roles = [
-            render::BRAND,
-            render::FG,
-            render::DIM,
-            render::LINE,
-            render::CODE,
-            render::CODEFG,
-            render::WARN,
-        ];
         let convert = |color| {
-            roles
+            ROLES
                 .iter()
                 .position(|&role| role == color)
                 .map_or(color, |i| {
@@ -109,11 +113,11 @@ impl Theme {
 
 pub(super) fn logo_colors() -> ([f32; 3], [f32; 3]) {
     let theme = CURRENT.get();
-    let rgb = |color| match theme.preview(Style::fg(color)).fg {
+    let rgb = |color| match resolve(Style::fg(color)).fg {
         Some(Color::Rgb { r, g, b }) => [r.into(), g.into(), b.into()],
         _ => unreachable!("logo colors are RGB"),
     };
-    let shade = if theme == Theme::Sage {
+    let shade = if theme == Theme::Sage && OVERLAY.get()[4].is_none() {
         [30., 40., 34.]
     } else {
         rgb(render::CODE)
@@ -124,11 +128,27 @@ pub(super) fn logo_colors() -> ([f32; 3], [f32; 3]) {
 pub(super) fn set(theme: Theme) {
     CURRENT.set(theme);
 }
+
+pub(super) fn set_overlay(colors: [Option<Color>; 7]) {
+    OVERLAY.set(colors);
+}
+
 pub(super) fn resolve(style: Style) -> Style {
     if style.literal_colors {
         style
     } else {
-        CURRENT.get().preview(style)
+        let builtin = CURRENT.get().preview(style);
+        let convert = |original: Option<Color>, fallback: Option<Color>| {
+            original
+                .and_then(|color| ROLES.iter().position(|role| *role == color))
+                .and_then(|index| OVERLAY.get()[index])
+                .or(fallback)
+        };
+        Style {
+            fg: convert(style.fg, builtin.fg),
+            bg: convert(style.bg, builtin.bg),
+            ..builtin
+        }
     }
 }
 

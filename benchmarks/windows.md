@@ -16,7 +16,7 @@ Measured on 24 November 2026. The machine ran Windows 11 22H2, build 22621.5409,
 - **Streaming CPU** is the change in combined user and kernel CPU time in the streaming sample window, divided by elapsed wall time and the number of logical CPUs. On this machine, 100% denotes all 8 logical CPUs. A zero means the process timer did not register an increment in that sample window.
 - **Time to prompt** is measured from spawning the process until the interactive prompt is visible. The profiles were already configured.
 
-KarryCode's full-turn memory peak occurs when it seals the conversation snapshot. The current profile implementation uses age with scrypt work factor 18. [Snapshot encryption](../src/profile.rs#L356)
+KarryCode's full-turn memory peak occurs when it seals the conversation snapshot with age and scrypt work factor 18. [Snapshot encryption in 1.2-beta](https://github.com/harzer228/KarryCode/blob/v1.2-beta/src/profile.rs#L356)
 
 ## Individual runs
 
@@ -46,3 +46,19 @@ python benchmarks/windows_cli.py --karrycode target/release/karrycode.exe --clau
 ```
 
 Pass executable paths for the CLIs you have installed. The script binds its fixture to loopback and uses temporary profiles and fixture credentials. [Sampler and fixture](windows_cli.py)
+
+## Plans, TOML configuration and Creator
+
+On 27 November 2026, the same fixture ran three times on an optimized Windows build with the new features and no installed extensions. The executable was 12.45 MiB. Its SHA-256 was `7e1a9f157d2e487b49d640c98709962bfdee91212c13074eb809d81ab7a60dec`. This snapshot was built before the Windows interpreter staging refinements.
+
+| Metric | Three runs |
+| --- | ---: |
+| Time to prompt | 1.58–2.25 s |
+| Idle RAM | 12.07–12.21 MiB |
+| Peak RAM while streaming | 14.01–14.21 MiB |
+| Full-turn peak RAM, including profile save | 269.96–270.06 MiB |
+| Streaming CPU, share of all logical CPUs | 0.18–0.26% |
+
+A separate Rhai fixture took 113 ms from approval to the next request carrying the tool result. Its process tree rose from 13.17 MiB to 37.05 MiB before the conversation save. The fixture passed a small JSON object to a fresh worker and returned one string. Running scripts with more data or external interpreters has a different cost.
+
+In Ubuntu WSL, a separate smoke test sent JSON and one staged text file through the KarryCode extension runner. Bash returned its result in 48 ms and Python in 46 ms with Bubblewrap. On this Windows host, AppContainer rejected the installed Python and PowerShell. A native Windows Bash executable was unavailable. These launches yielded diagnostic results.

@@ -100,6 +100,22 @@ fn read(path: &Path) -> Result<Option<String>> {
     }
 }
 
+pub(super) fn snapshot_text(root: &Path, path: &Path) -> Result<Option<String>> {
+    read(&checked(root, path)?)
+}
+
+pub(super) fn unified_patch(root: &Path, path: &Path, text: &str) -> Result<Change> {
+    ensure!(text.len() <= MAX_FILE as usize, "Patch exceeds 1 MiB");
+    let before = snapshot_text(root, path)?.context("Patch target does not exist")?;
+    let patch = diffy::Patch::from_str(text).context("Expected a unified diff for one file")?;
+    let after = diffy::apply(&before, &patch).context("Patch does not match the current file")?;
+    Ok(Change::Replace {
+        path: path.to_owned(),
+        before: Some(before),
+        after: Some(after),
+    })
+}
+
 impl Batch {
     pub fn prepare(root: &Path, changes: Vec<Change>) -> Result<Self> {
         ensure!(
